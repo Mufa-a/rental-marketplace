@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Django
+backend/.env
+*.sqlite3
+
+# Node
+node_modules/
+frontend/.next/
+frontend/.env.local
+
+# General
+.DS_Store
+*.log
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.local.example
+
+# Test and editor artifacts
+.pytest_cache/
+pytest-cache-files-*/
+.vscode/
+*.tsbuildinfo

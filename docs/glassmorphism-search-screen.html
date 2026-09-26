@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rental marketplace — search, glassmorphism concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --gold:#E8A33D;
+    --gold-deep:#B87A22;
+    --sage:#4CAF82;
+    --glass:rgba(255,255,255,0.12);
+    --glass-strong:rgba(255,255,255,0.20);
+    --glass-border:rgba(255,255,255,0.28);
+    --ink:#0E1B2C;
+    --paper:#F6F4EE;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:'Manrope',sans-serif;
+    background:
+      radial-gradient(circle at 15% 0%, rgba(76,175,130,0.25), transparent 45%),
+      radial-gradient(circle at 85% 15%, rgba(232,163,61,0.18), transparent 40%),
+      linear-gradient(160deg, #16233F 0%, #123A3D 60%, #0E2E30 100%);
+    color:#F2F0E9;
+    min-height:100vh;
+    padding-bottom:60px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px;}
+
+  /* Navbar */
+  nav{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 28px;margin:0 0 40px;
+    background:var(--glass);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    border-bottom:1px solid var(--glass-border);
+  }
+  .brand{font-family:'Fraunces',serif;font-size:21px;font-weight:500;letter-spacing:0.2px;}
+  .brand span{color:var(--gold);}
+  .nav-links{display:flex;gap:28px;font-size:14px;color:rgba(242,240,233,0.75);}
+  .nav-cta{
+    background:var(--gold);color:#26170A;border:none;padding:9px 18px;
+    border-radius:100px;font-family:'Manrope',sans-serif;font-weight:700;font-size:13px;
+  }
+
+  /* Hero / search */
+  .hero{padding:20px 0 44px;}
+  .eyebrow{font-size:13px;color:rgba(242,240,233,0.6);margin:0 0 10px;}
+  h1{
+    font-family:'Fraunces',serif;font-weight:500;font-size:clamp(26px,4.6vw,40px);line-height:1.15;
+    margin:0 0 28px;max-width:600px;
+  }
+  .search-glass{
+    background:var(--glass-strong);
+    backdrop-filter:blur(22px);
+    -webkit-backdrop-filter:blur(22px);
+    border:1px solid var(--glass-border);
+    border-radius:20px;
+    padding:20px;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:14px;
+    box-shadow:0 20px 50px rgba(0,0,0,0.28);
+  }
+  .search-btn{grid-column:1/-1;}
+  @media (min-width:720px){
+    .search-glass{grid-template-columns:1.4fr 1fr 1fr 1fr auto;}
+    .search-btn{grid-column:auto;}
+  }
+  .field{display:flex;flex-direction:column;gap:5px;}
+  .field label{font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgba(242,240,233,0.55);}
+  .field input,.field select{
+    background:rgba(255,255,255,0.08);
+    border:1px solid rgba(255,255,255,0.18);
+    border-radius:10px;
+    padding:10px 12px;
+    color:#F2F0E9;
+    font-family:'Manrope',sans-serif;
+    font-size:14px;
+  }
+  .field input::placeholder{color:rgba(242,240,233,0.45);}
+  .search-btn{
+    align-self:end;
+    background:var(--gold);
+    color:#26170A;
+    border:none;
+    border-radius:10px;
+    padding:0 22px;
+    font-weight:700;
+    font-size:14px;
+    cursor:pointer;
+  }
+
+  /* Results header */
+  .results-head{
+    display:flex;justify-content:space-between;align-items:baseline;
+    margin:8px 0 20px;
+  }
+  .results-head h2{font-family:'Fraunces',serif;font-weight:500;font-size:20px;margin:0;}
+  .results-count{font-size:13px;color:rgba(242,240,233,0.6);}
+
+  /* Cards */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;}
+  .card{
+    background:var(--glass);
+    backdrop-filter:blur(16px);
+    -webkit-backdrop-filter:blur(16px);
+    border:1px solid var(--glass-border);
+    border-radius:18px;
+    overflow:hidden;
+    display:flex;flex-direction:column;
+  }
+  .thumb{
+    height:150px;
+    position:relative;
+    display:flex;align-items:flex-end;
+    padding:12px;
+  }
+  .thumb.t1{background:linear-gradient(135deg,#3D6B5E,#1E3B34);}
+  .thumb.t2{background:linear-gradient(135deg,#5A4A7A,#2A2140);}
+  .thumb.t3{background:linear-gradient(135deg,#7A5A3A,#3D2A16);}
+  .badge{
+    font-size:11px;font-weight:700;padding:5px 10px;border-radius:100px;
+    display:inline-flex;align-items:center;gap:5px;
+  }
+  .badge.verified{background:rgba(232,163,61,0.9);color:#26170A;}
+  .badge.trusted{background:rgba(76,175,130,0.9);color:#0E2417;}
+  .card-body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:10px;flex:1;}
+  .price{font-family:'Fraunces',serif;font-size:22px;font-weight:500;}
+  .price small{font-family:'Manrope',sans-serif;font-size:12px;font-weight:500;color:rgba(242,240,233,0.6);}
+  .meta{font-size:13px;color:rgba(242,240,233,0.72);}
+  .fresh{
+    font-size:12px;color:var(--sage);display:flex;align-items:center;gap:6px;
+    padding-top:8px;border-top:1px solid rgba(255,255,255,0.12);margin-top:auto;
+  }
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--sage);}
+  .view-btn{
+    margin-top:4px;
+    background:rgba(255,255,255,0.1);
+    border:1px solid rgba(255,255,255,0.2);
+    color:#F2F0E9;
+    padding:9px;
+    border-radius:10px;
+    font-family:'Manrope',sans-serif;
+    font-size:13px;font-weight:600;
+    cursor:pointer;
+  }
+
+  /* Responsive */
+  .nav-links{display:none;}
+  .wrap{padding:0 18px;}
+  nav{padding:16px 18px;}
+  .price{font-size:20px;}
+  .thumb{height:130px;}
+  .results-head{flex-direction:column;align-items:flex-start;gap:4px;}
+
+  @media (min-width:640px){
+    .results-head{flex-direction:row;align-items:baseline;gap:0;}
+  }
+  @media (min-width:860px){
+    .nav-links{display:flex;}
+    .wrap{padding:0 28px;}
+    nav{padding:18px 28px;}
+    .price{font-size:22px;}
+    .thumb{height:150px;}
+  }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand">nyumba<span>fresh</span></div>
+  <div class="nav-links">
+    <span>Search</span><span>How it works</span><span>Verification</span><span>For landlords</span>
+  </div>
+  <button class="nav-cta">List a property</button>
+</nav>
+
+<div class="wrap">
+  <div class="hero">
+    <p class="eyebrow">Nairobi &middot; Westlands, Kilimani, Lavington</p>
+    <h1>Every unit here was confirmed available this week.</h1>
+
+    <div class="search-glass">
+      <div class="field">
+        <label>Area</label>
+        <input type="text" value="Westlands, 5km radius">
+      </div>
+      <div class="field">
+        <label>Budget</label>
+        <input type="text" value="KSh 20,000&ndash;30,000">
+      </div>
+      <div class="field">
+        <label>Bedrooms</label>
+        <select><option>1 bedroom</option></select>
+      </div>
+      <div class="field">
+        <label>Move-in</label>
+        <input type="text" value="October">
+      </div>
+      <button class="search-btn">Search</button>
+    </div>
+  </div>
+
+  <div class="results-head">
+    <h2>18 units match your search</h2>
+    <span class="results-count">Sorted by freshness</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="thumb t1"><span class="badge trusted">Trusted landlord</span></div>
+      <div class="card-body">
+        <div class="price">KSh 26,000 <small>/ month</small></div>
+        <div class="meta">1 bed &middot; 1 bath &middot; Unit A03, Green Apartments &middot; Westlands</div>
+        <div class="fresh"><span class="dot"></span>Availability confirmed 3 hours ago</div>
+        <button class="view-btn">Request viewing</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="thumb t2"><span class="badge verified">ID verified</span></div>
+      <div class="card-body">
+        <div class="price">KSh 22,500 <small>/ month</small></div>
+        <div class="meta">1 bed &middot; 1 bath &middot; Unit B12, Ridgeways Court &middot; Kilimani</div>
+        <div class="fresh"><span class="dot"></span>Availability confirmed yesterday</div>
+        <button class="view-btn">Request viewing</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="thumb t3"><span class="badge trusted">Trusted landlord</span></div>
+      <div class="card-body">
+        <div class="price">KSh 29,000 <small>/ month</small></div>
+        <div class="meta">2 bed &middot; 1 bath &middot; Unit A07, Parkview Heights &middot; Lavington</div>
+        <div class="fresh"><span class="dot"></span>Availability confirmed 3 hours ago</div>
+        <button class="view-btn">Request viewing</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
