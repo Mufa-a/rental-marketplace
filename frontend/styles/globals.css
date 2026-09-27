@@ -19,3 +19,93 @@
 /* Separate marketplace admin and first-priority outcome reporting */
 .outcome-first{padding:clamp(20px,4vw,32px);margin:0 0 24px;border-color:rgba(245,189,104,.45);background:linear-gradient(120deg,rgba(245,189,104,.12),rgba(255,255,255,.045))}.outcome-first h2{font-size:clamp(24px,4vw,34px);margin:0 0 8px}.outcome-first-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 0;border-top:1px solid var(--line)}.outcome-first-row .muted{margin:6px 0 0}.outcome-first .outcome-actions{display:flex;flex-wrap:wrap;gap:8px}.admin-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:22px 0 38px}.admin-metric{padding:20px;display:flex;flex-direction:column;gap:13px}.admin-metric strong{font-size:25px;color:var(--gold)}.admin-shell .dashboard-content{margin:36px 0}.admin-shell .dashboard-content h2{margin:0 0 16px}.admin-table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--surface)}.admin-table{width:100%;border-collapse:collapse;min-width:720px;text-align:left}.admin-table th,.admin-table td{padding:13px 15px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}.admin-table th{color:var(--sage);font-size:11px;letter-spacing:.08em;text-transform:uppercase}.admin-table tr:last-child td{border-bottom:0}
 @media(max-width:700px){.outcome-first-row{align-items:flex-start;flex-direction:column}.admin-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-metric{padding:15px}.admin-metric strong{font-size:21px}}
+
+/* ============================================================
+   Design system extensions — badges, focus cards, area/activity
+   tables, admin layout, tabs. Built on the existing tokens above
+   (--gold/--sage/--night/--ink/--muted/--line/--surface/--glass)
+   so every page keeps the same dark, glassmorphic identity.
+   ============================================================ */
+:root{--danger-strong:#ff6b57;--radius-sm:10px;--radius-md:16px;--radius-lg:22px}
+
+/* Badges: verification + severity, used on listing cards, the detail
+   page, and the admin "Areas of focus" section. */
+.badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 11px;font-size:11px;font-weight:800;letter-spacing:.03em;line-height:1.4}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge-verified{background:rgba(101,208,160,.16);color:#a5ecc6}
+.badge-pending{background:rgba(245,189,104,.16);color:var(--gold)}
+.badge-unverified{background:rgba(255,255,255,.09);color:var(--muted)}
+.badge-high{background:rgba(255,107,87,.16);color:var(--danger-strong)}
+.badge-medium{background:rgba(245,189,104,.16);color:var(--gold)}
+.badge-low{background:rgba(255,255,255,.09);color:var(--muted)}
+
+/* Page/section headers used across dashboards */
+.page-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:28px}
+.page-head h1{font-size:clamp(28px,4vw,38px);margin:6px 0 4px}
+.page-head .muted{max-width:560px;line-height:1.6}
+
+/* Admin shell: sidebar + content on desktop, stacked on mobile */
+.admin-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px;align-items:start}
+.admin-sidenav{position:sticky;top:20px;display:flex;flex-direction:column;gap:2px;padding:10px}
+.admin-sidenav .side-group{margin:14px 0 6px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.admin-sidenav .side-group:first-child{margin-top:0}
+.admin-sidenav a,.admin-sidenav span.side-link{display:block;padding:8px 10px;border-radius:9px;color:var(--muted);text-decoration:none;font-size:13.5px}
+.admin-sidenav a:hover{background:var(--surface-hover);color:var(--ink)}
+.admin-sidenav .side-link.active{background:var(--surface-hover);color:var(--ink);font-weight:700}
+@media(max-width:900px){.admin-layout{grid-template-columns:1fr}.admin-sidenav{position:static;display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;padding:0}.admin-sidenav .side-group{display:none}}
+
+/* KPI cards: give every card a small top-left icon dot so a grid of
+   identical rectangles doesn't read as one undifferentiated block */
+.admin-metric{border-top:2px solid var(--line);position:relative}
+.admin-metric.accent-gold{border-top-color:var(--gold)}
+.admin-metric.accent-sage{border-top-color:var(--sage)}
+.admin-metric.accent-danger{border-top-color:var(--danger-strong)}
+
+/* Areas of focus */
+.focus-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.focus-card{padding:18px 20px;border-left:3px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.focus-card[data-severity="high"]{border-left-color:var(--danger-strong)}
+.focus-card[data-severity="medium"]{border-left-color:var(--gold)}
+.focus-card[data-severity="low"]{border-left-color:var(--sage)}
+.focus-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.focus-card-top strong{font-size:28px;font-family:Fraunces,serif;font-weight:500}
+.focus-card h3{font-size:15px;margin:0;line-height:1.35}
+.focus-card p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.55}
+.focus-card .focus-action{margin-top:auto;font-size:12.5px;font-weight:700;color:var(--gold);text-decoration:none}
+.focus-card .focus-action:hover{color:var(--gold-hover)}
+.focus-empty{padding:26px;text-align:center;color:var(--sage);font-size:14px}
+
+/* Area insights table */
+.area-table td.area-name{font-weight:700}
+.area-table td.area-name span{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.demand-bar{display:inline-block;height:6px;border-radius:99px;background:linear-gradient(90deg,var(--gold),var(--sage));vertical-align:middle;margin-right:8px}
+
+/* Recent activity feed */
+.activity-feed{display:flex;flex-direction:column}
+.activity-row{display:flex;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}
+.activity-row:last-child{border-bottom:0}
+.activity-dot{width:8px;height:8px;margin-top:6px;border-radius:50%;background:var(--sage);flex-shrink:0}
+.activity-row p{margin:0;font-size:13.5px}
+.activity-row time{font-size:11.5px;color:var(--muted)}
+
+/* Tabs, used to keep the raw data tables from stacking into a wall */
+.tabbar{display:flex;gap:4px;padding:4px;border-radius:12px;background:rgba(7,18,24,.4);border:1px solid var(--line);width:max-content;margin-bottom:18px;flex-wrap:wrap}
+.tabbar button{min-height:34px;padding:7px 14px;font-size:12.5px;font-weight:700;background:transparent;color:var(--muted);border:0;border-radius:9px}
+.tabbar button:hover{background:transparent;transform:none;color:var(--ink)}
+.tabbar button[aria-selected="true"]{background:var(--surface-hover);color:var(--ink)}
+
+/* Shared site header, used by SiteHeader.tsx */
+.site-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:36px;gap:20px;flex-wrap:wrap}
+.site-header .brand-mark{display:inline-flex;align-items:center;gap:9px;font-family:Fraunces,serif;font-size:23px;text-decoration:none;letter-spacing:-.03em}
+.site-header .brand-mark .dot{width:9px;height:9px;border-radius:3px;background:var(--gold);transform:rotate(45deg);flex-shrink:0}
+
+/* Property/listing verification badge placement on cards */
+.listing-card-content .badge-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+
+/* Section intro used on the admin overview above each major block */
+.section-lede{display:flex;align-items:baseline;justify-content:space-between;gap:14px;margin:38px 0 16px}
+.section-lede:first-of-type{margin-top:0}
+.section-lede h2{margin:0;font-size:22px}
+.section-lede .muted{font-size:12.5px;margin:0}
+
+@media(max-width:620px){.focus-card-top strong{font-size:24px}.focus-grid{grid-template-columns:1fr}}

@@ -196,7 +196,10 @@ class PublicUnitSearchView(APIView):
         page = paginator.paginate_queryset(units, request, view=self)
         data = UnitSerializer(page, many=True).data
         for item, unit in zip(data, page):
-            item["property"] = {"area": unit.property.area, "city": unit.property.city}
+            item["property"] = {
+                "area": unit.property.area, "city": unit.property.city,
+                "verification_status": unit.property.verification_status,
+            }
             if unit.property.location:
                 # Approximate public map pins to protect the exact home entrance location.
                 item["property"]["latitude"] = round(unit.property.location.latitude, 3)
@@ -219,6 +222,7 @@ class PublicUnitDetailView(APIView):
         data["property"] = {
             "name": unit.property.name, "area": unit.property.area, "city": unit.property.city,
             "county": unit.property.county, "country": unit.property.country,
+            "verification_status": unit.property.verification_status,
         }
         return Response(data)
 

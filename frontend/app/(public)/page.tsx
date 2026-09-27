@@ -4,10 +4,13 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import NearbyMap from "@/components/NearbyMap";
+import SiteHeader from "@/components/SiteHeader";
+import VerificationBadge from "@/components/VerificationBadge";
 
 type Unit = {
   id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string;
-  distance_km: number | null; media: { url: string; alt_text: string }[]; property: { area: string; city: string; latitude?: number; longitude?: number };
+  distance_km: number | null; media: { url: string; alt_text: string }[];
+  property: { area: string; city: string; latitude?: number; longitude?: number; verification_status?: string };
 };
 type Amenity = { id: number; name: string; slug: string };
 type Results = { results: Unit[]; count: number; next: string | null };
@@ -68,7 +71,7 @@ export default function Home() {
   }, []);
 
   return <main className="shell">
-    <header className="topnav"><Link className="brand" href="/">Nyumbani</Link><nav className="nav-actions"><Link className="navlink" href="/login">Sign in</Link><Link className="button button-small" href="/login">Create account</Link></nav></header>
+    <SiteHeader right={<><Link className="navlink" href="/login">Sign in</Link><Link className="button button-small" href="/login">Create account</Link></>} />
     <section className="hero glass"><div className="hero-copy"><p className="eyebrow">A clearer way to rent in Kenya</p><h1>Find a place that feels like home.</h1><p className="muted">Explore real rental homes, see clear monthly prices, and arrange viewings directly with landlords.</p></div>
       <form onSubmit={search} className="search-panel" aria-label="Search available rentals">
         <button className="button button-secondary" type="button" onClick={findNearby} disabled={loading || locating}>{locating ? "Finding your location…" : "Homes near me"}</button>
@@ -90,7 +93,7 @@ export default function Home() {
       {!loading && nearby && mapVisible && <NearbyMap units={units} center={nearby} />}
       {!loading && units.length > 0 && <div className="listing-grid">{units.map(unit => <Link key={unit.id} href={`/listings/${encodeURIComponent(unit.property.city.toLowerCase())}/${encodeURIComponent(unit.property.area.toLowerCase())}/${unit.slug}`} className="glass listing-card">
         {unit.media[0]?.url ? <img className="listing-image" src={unit.media[0].url} alt={unit.media[0].alt_text || `${unit.title} rental home`} /> : <div className="listing-image image-placeholder" aria-hidden="true"><span>Nyumbani</span></div>}
-        <div className="listing-card-content"><span className="status">Available</span><p className="muted location">{unit.property.area}, {unit.property.city}{unit.distance_km !== null && unit.distance_km !== undefined ? ` · ${unit.distance_km} km away` : ""}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong><p className="muted">{unit.bedrooms === 0 ? "Bedsitter" : `${unit.bedrooms} bedroom${unit.bedrooms === 1 ? "" : "s"}`} · {unit.bathrooms} bath</p></div>
+        <div className="listing-card-content"><div className="badge-row"><span className="status">Available</span><VerificationBadge status={unit.property.verification_status} /></div><p className="muted location">{unit.property.area}, {unit.property.city}{unit.distance_km !== null && unit.distance_km !== undefined ? ` · ${unit.distance_km} km away` : ""}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong><p className="muted">{unit.bedrooms === 0 ? "Bedsitter" : `${unit.bedrooms} bedroom${unit.bedrooms === 1 ? "" : "s"}`} · {unit.bathrooms} bath</p></div>
       </Link>)}</div>}
       {!loading && units.length === 0 && !error && <div className="glass empty">Homes will appear here when available. Try searching a neighborhood.</div>}
       {!loading && searched && units.length > 0 && hasMore && <button className="button button-secondary load-more" onClick={() => void search(undefined, page + 1, true)}>Show more homes</button>}
