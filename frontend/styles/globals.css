@@ -109,3 +109,23 @@
 .section-lede .muted{font-size:12.5px;margin:0}
 
 @media(max-width:620px){.focus-card-top strong{font-size:24px}.focus-grid{grid-template-columns:1fr}}
+
+/* Mobile filter bottom sheet. Desktop keeps every field inline in the
+   search panel exactly as before — .filter-sheet only changes layout
+   under the mobile breakpoint. */
+.mobile-filter-trigger{display:none}
+.sheet-backdrop{display:none}
+@media(max-width:640px){
+  .mobile-filter-trigger{display:inline-flex}
+  .filter-sheet{display:none}
+  .filter-sheet.is-open{
+    display:flex;flex-direction:column;gap:14px;position:fixed;left:0;right:0;bottom:0;
+    background:var(--night);border:1px solid var(--line);border-bottom:none;
+    border-radius:22px 22px 0 0;padding:20px 20px calc(20px + env(safe-area-inset-bottom,0px));
+    max-height:78vh;overflow-y:auto;z-index:60;box-shadow:0 -18px 40px rgba(0,0,0,.45);
+  }
+  .filter-sheet-head{display:flex;justify-content:space-between;align-items:center;font-size:16px}
+  .sheet-close{background:transparent;color:var(--muted);border:0;min-height:32px;padding:4px 8px}
+  .sheet-apply{margin-top:4px}
+  .sheet-backdrop{display:block;position:fixed;inset:0;background:rgba(4,10,14,.6);z-index:55}
+}

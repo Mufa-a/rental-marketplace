@@ -28,6 +28,7 @@ export default function Home() {
   const [radiusKm, setRadiusKm] = useState("10");
   const [mapVisible, setMapVisible] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   async function search(event?: FormEvent, requestedPage = 1, append = false, location = nearby) {
     event?.preventDefault();
@@ -77,13 +78,19 @@ export default function Home() {
         <button className="button button-secondary" type="button" onClick={findNearby} disabled={loading || locating}>{locating ? "Finding your location…" : "Homes near me"}</button>
         {nearby && <><label>Search radius<select value={radiusKm} onChange={event => setRadiusKm(event.target.value)}><option value="5">Within 5 km</option><option value="10">Within 10 km</option><option value="25">Within 25 km</option><option value="50">Within 50 km</option></select></label><button className="button button-secondary" type="button" onClick={() => { setNearby(null); void search(undefined, 1, false, null); }}>Clear nearby</button></>}
         <label>Area<input value={filters.area} onChange={e => setFilters({ ...filters, area: e.target.value })} placeholder="Westlands, Nyali…" /></label>
-        <label>City<input value={filters.city} onChange={e => setFilters({ ...filters, city: e.target.value })} placeholder="Nairobi" /></label>
-        <label>Min. rent<input type="number" min="0" value={filters.min_rent} onChange={e => setFilters({ ...filters, min_rent: e.target.value })} placeholder="KSh" /></label>
-        <label>Max. rent<input type="number" min="1" value={filters.max_rent} onChange={e => setFilters({ ...filters, max_rent: e.target.value })} placeholder="KSh" /></label>
-        <label>Bedrooms<select value={filters.bedrooms} onChange={e => setFilters({ ...filters, bedrooms: e.target.value })}><option value="">Any</option>{[0,1,2,3,4].map(n => <option value={n} key={n}>{n === 0 ? "Bedsitter / studio" : `${n}+`}</option>)}</select></label>
-        <label>Home type<select value={filters.unit_type} onChange={e => setFilters({ ...filters, unit_type: e.target.value })}><option value="">Any type</option><option value="bedsitter">Bedsitter</option><option value="studio">Studio</option><option value="apartment">Apartment</option><option value="house">House</option><option value="maisonette">Maisonette</option><option value="room">Room</option></select></label>
-        <label>Amenity<select value={filters.amenity} onChange={e => setFilters({ ...filters, amenity: e.target.value })}><option value="">Any</option>{amenities.map(item => <option value={item.slug} key={item.id}>{item.name}</option>)}</select></label>
-        <label>Sort by<select value={nearby ? "distance" : filters.ordering} onChange={e => setFilters({ ...filters, ordering: e.target.value })} disabled={Boolean(nearby)}><option value="-created_at">Newest</option><option value="monthly_rent">Price: low to high</option><option value="-monthly_rent">Price: high to low</option><option value="bedrooms">Bedrooms</option><option value="distance" disabled={!nearby}>Nearest first (use Homes near me)</option></select></label>
+        <button type="button" className="button button-secondary mobile-filter-trigger" onClick={() => setFiltersOpen(true)}>More filters</button>
+        {filtersOpen && <div className="sheet-backdrop" onClick={() => setFiltersOpen(false)} aria-hidden="true" />}
+        <div className={`filter-sheet${filtersOpen ? " is-open" : ""}`} role="group" aria-label="Additional filters">
+          <div className="filter-sheet-head"><strong>Filters</strong><button type="button" className="sheet-close" onClick={() => setFiltersOpen(false)} aria-label="Close filters">✕</button></div>
+          <label>City<input value={filters.city} onChange={e => setFilters({ ...filters, city: e.target.value })} placeholder="Nairobi" /></label>
+          <label>Min. rent<input type="number" min="0" value={filters.min_rent} onChange={e => setFilters({ ...filters, min_rent: e.target.value })} placeholder="KSh" /></label>
+          <label>Max. rent<input type="number" min="1" value={filters.max_rent} onChange={e => setFilters({ ...filters, max_rent: e.target.value })} placeholder="KSh" /></label>
+          <label>Bedrooms<select value={filters.bedrooms} onChange={e => setFilters({ ...filters, bedrooms: e.target.value })}><option value="">Any</option>{[0,1,2,3,4].map(n => <option value={n} key={n}>{n === 0 ? "Bedsitter / studio" : `${n}+`}</option>)}</select></label>
+          <label>Home type<select value={filters.unit_type} onChange={e => setFilters({ ...filters, unit_type: e.target.value })}><option value="">Any type</option><option value="bedsitter">Bedsitter</option><option value="studio">Studio</option><option value="apartment">Apartment</option><option value="house">House</option><option value="maisonette">Maisonette</option><option value="room">Room</option></select></label>
+          <label>Amenity<select value={filters.amenity} onChange={e => setFilters({ ...filters, amenity: e.target.value })}><option value="">Any</option>{amenities.map(item => <option value={item.slug} key={item.id}>{item.name}</option>)}</select></label>
+          <label>Sort by<select value={nearby ? "distance" : filters.ordering} onChange={e => setFilters({ ...filters, ordering: e.target.value })} disabled={Boolean(nearby)}><option value="-created_at">Newest</option><option value="monthly_rent">Price: low to high</option><option value="-monthly_rent">Price: high to low</option><option value="bedrooms">Bedrooms</option><option value="distance" disabled={!nearby}>Nearest first (use Homes near me)</option></select></label>
+          <button type="button" className="button sheet-apply" onClick={() => { setFiltersOpen(false); void search(); }}>Show homes</button>
+        </div>
         <button className="button search-button" type="submit" disabled={loading}>{loading ? "Searching…" : "Find homes"}</button>
       </form>
     </section>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiFetch, signOut } from "@/lib/api";
 import ViewingCreditShop from "@/components/ViewingCreditShop";
+import SiteHeader from "@/components/SiteHeader";
 
 type Request = { id: number; status: string; note: string; created_at: string; unit: number; unit_title: string; property_name: string; area: string; monthly_rent: number; landlord_note: string; viewing: { id: number; scheduled_at: string; status: string } | null };
 const label = (status: string) => status.replaceAll("_", " ").replace(/^./, s => s.toUpperCase());
@@ -35,7 +36,7 @@ export default function TenantDashboard() {
   }, []);
 
   const reportsDue = items.filter(item => item.viewing && (item.viewing.status === "outcome_pending" || (item.viewing.status === "scheduled" && new Date(item.viewing.scheduled_at).getTime() <= Date.now())));
-  return <main className="shell"><header className="topnav"><Link href="/" className="brand">Nyumbani</Link><nav className="nav-actions"><Link className="navlink" href="/">Browse homes</Link><Link className="navlink" href="/saved">Saved homes</Link><Link className="navlink" href="/profile">Profile</Link><button className="button-secondary" onClick={signOut}>Sign out</button></nav></header>
+  return <main className="shell"><SiteHeader right={<><Link className="navlink" href="/">Browse homes</Link><Link className="navlink" href="/saved">Saved homes</Link><Link className="navlink" href="/profile">Profile</Link><button className="button-secondary" onClick={signOut}>Sign out</button></>} />
     {reportsDue.length > 0 && <section className="glass activity-card outcome-first"><p className="eyebrow">Action needed first</p><h2>Tell us what happened at your viewing</h2><p className="muted">Your report helps us keep listings accurate. Your report helps us verify the outcome; the landlord’s rental report removes a rented unit from search.</p>{reportsDue.map(item => <div className="outcome-first-row" key={item.viewing!.id}><div><strong>{item.unit_title}</strong><p className="muted">{item.property_name} · {new Date(item.viewing!.scheduled_at).toLocaleString()}</p></div><div className="outcome-actions"><button className="button-secondary" onClick={() => void act(item.viewing!.id, "outcome", "did_not_rent")}>I did not rent</button><button className="button-secondary" onClick={() => void act(item.viewing!.id, "outcome", "still_deciding")}>Still deciding</button></div></div>)}</section>}
     <section className="dashboard-intro"><p className="eyebrow">Tenant dashboard</p><h1>Your viewings</h1><p className="muted">Follow your requests and see landlord responses in one place.</p><Link className="button" href="/">Find a home</Link></section>
     <section className="dashboard-content"><ViewingCreditShop /><div className="section-heading"><div><p className="eyebrow">Your activity</p><h2>Viewing requests</h2></div><span className="muted">{items.length} total</span></div>
