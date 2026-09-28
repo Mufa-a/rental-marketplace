@@ -133,3 +133,65 @@
   .filter-sheet.is-open .sheet-apply{display:block;margin-top:4px}
   .sheet-backdrop{display:block;position:fixed;inset:0;background:rgba(4,10,14,.6);z-index:55}
 }
+
+/* ============================================================
+   Homepage v2: illustrated hero, area chips, how-it-works,
+   landlord call-to-action, designed empty states.
+   ============================================================ */
+.hero-v2{position:relative;overflow:hidden;padding:clamp(26px,4.5vw,56px);background:radial-gradient(120% 90% at 100% 0%,rgba(245,189,104,.14),transparent 55%),linear-gradient(135deg,rgba(255,255,255,.09),rgba(255,255,255,.03))}
+.hero-v2-top{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:clamp(22px,4vw,52px);align-items:center}
+.hero-v2 h1{font-size:clamp(38px,5.6vw,68px);line-height:1.03;margin:0 0 18px;letter-spacing:-.035em}
+.hero-v2 h1 em{font-style:italic;font-weight:500;color:var(--gold)}
+.hero-v2-copy .muted{max-width:520px;line-height:1.75;margin:0;font-size:16.5px}
+.hero-pill{display:inline-flex;align-items:center;gap:9px;padding:6px 14px;margin-bottom:20px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);font-size:11.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--sage)}
+.hero-pill i{width:7px;height:7px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 4px rgba(156,221,189,.18)}
+.hero-art{position:relative;aspect-ratio:480/396;border-radius:22px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow)}
+.hero-art svg{display:block;width:100%;height:100%}
+.art-chip{position:absolute;display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;background:rgba(7,18,24,.74);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid var(--line);font-size:12.5px;font-weight:700;color:var(--ink);white-space:nowrap}
+.art-chip::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--gold)}
+.art-chip.a{top:8%;left:6%}
+.art-chip.b{top:42%;right:5%}
+.art-chip.c{bottom:10%;left:8%}
+.hero-v2 .search-panel{margin-top:36px}
+
+.area-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:18px}
+.area-row>span{font-size:12.5px;color:var(--muted);margin-right:4px}
+.chip{min-height:0;padding:7px 15px;border-radius:999px;font-size:13px;font-weight:700;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid var(--line)}
+.chip:hover{background:rgba(245,189,104,.14);border-color:rgba(245,189,104,.5);transform:none}
+.chip[aria-pressed="true"]{background:var(--gold);color:#241a08;border-color:var(--gold)}
+
+.listing-card{transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease}
+.listing-card:hover{transform:translateY(-4px);border-color:rgba(245,189,104,.45);box-shadow:0 22px 50px rgba(0,0,0,.32)}
+
+.empty-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:48px 24px}
+.empty-state h3{margin:8px 0 0;font-size:22px;color:var(--ink)}
+.empty-state p{margin:0;max-width:430px;line-height:1.65}
+.empty-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:12px}
+
+.how{margin-top:84px}
+.how-head{max-width:600px;margin-bottom:28px}
+.how-head h2{font-size:clamp(28px,4vw,42px);line-height:1.1;margin:0}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.step{padding:28px}
+.step-num{display:block;margin-bottom:16px;font-family:Fraunces,serif;font-size:58px;line-height:1;color:transparent;-webkit-text-stroke:1px rgba(245,189,104,.75)}
+.step h3{margin:0 0 8px;font-size:20px}
+.step p{margin:0;color:var(--muted);line-height:1.7;font-size:14.5px}
+
+.cta-band{margin-top:56px;padding:clamp(26px,4vw,46px);display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:24px;background:linear-gradient(120deg,rgba(245,189,104,.17),rgba(156,221,189,.08))}
+.cta-band h2{margin:0 0 8px;font-size:clamp(24px,3.4vw,36px)}
+.cta-band p{margin:0;max-width:520px;color:var(--muted);line-height:1.7}
+
+@media(max-width:900px){
+  .hero-v2-top{grid-template-columns:1fr}
+  .hero-art{max-width:480px}
+  .steps{grid-template-columns:1fr}
+}
+@media(max-width:640px){
+  .hero-art{display:none}
+  .how{margin-top:56px}
+}
+
+/* Search panel inside the v2 hero: an even 5x2 grid on wide screens, and on
+   small screens the Area field leads at full width above the two buttons. */
+@media(min-width:1101px){.hero-v2 .search-panel{grid-template-columns:repeat(5,minmax(0,1fr))}}
+@media(max-width:900px){.hero-v2 .area-field{grid-column:1/-1;order:-1}}
