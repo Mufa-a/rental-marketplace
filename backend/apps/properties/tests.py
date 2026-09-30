@@ -91,3 +91,50 @@ class TestListingsAPI:
         client = APIClient()
         client.force_authenticate(owner)
         assert client.get("/api/v1/properties/saved/").status_code == 403
+
+
+@pytest.mark.django_db
+class TestDeletionAndThrottling:
+    def _listing(self):
+        owner = landlord("+254700000041")
+        prop = Property.objects.create(landlord=owner.landlord_profile, name="Hist", address_line="1 Road", area="Kilimani", city="Nairobi", county="Nairobi")
+        unit = Unit.objects.create(property=prop, unit_number="1", title="Studio", unit_type="studio", monthly_rent=15000, is_published=True)
+        return owner, prop, unit
+
+    def test_deleting_a_listing_with_viewing_history_is_refused_not_a_server_error(self):
+        from apps.viewings.models import ViewingRequest
+
+        owner, prop, unit = self._listing()
+        tenant = User.objects.create_user(username="t-hist", phone_number="+254700000042", role="tenant")
+        ViewingRequest.objects.create(tenant=TenantProfile.objects.create(user=tenant), unit=unit)
+        client = APIClient()
+        client.force_authenticate(owner)
+        assert client.delete(f"/api/v1/properties/units/{unit.id}/").status_code == 409
+        response = client.delete(f"/api/v1/properties/{prop.id}/")
+        assert response.status_code == 409
+        assert response.data["error"]["code"] == "has_history"
+        assert Property.objects.filter(pk=prop.id).exists() and Unit.objects.filter(pk=unit.id).exists()
+
+    def test_deleting_a_listing_without_history_works_and_is_audited(self):
+        from apps.core.models import AuditLog
+
+        owner, _, unit = self._listing()
+        client = APIClient()
+        client.force_authenticate(owner)
+        assert client.delete(f"/api/v1/properties/units/{unit.id}/").status_code == 204
+        assert AuditLog.objects.filter(action="unit.deleted", object_id=str(unit.id)).exists()
+
+    def test_public_search_is_rate_limited(self, monkeypatch):
+        from rest_framework.throttling import ScopedRateThrottle
+        monkeypatch.setitem(ScopedRateThrottle.THROTTLE_RATES, "public_search", "3/min")
+        client = APIClient()
+        codes = [client.get("/api/v1/properties/search/").status_code for _ in range(5)]
+        assert codes[:3] == [200, 200, 200] and codes[-1] == 429
+
+    def test_private_tenant_and_landlord_data_is_not_in_public_listing_json(self):
+        owner, _, unit = self._listing()
+        body = APIClient().get("/api/v1/properties/search/").content.decode()
+        detail = APIClient().get(f"/api/v1/properties/listings/{unit.slug}/").content.decode()
+        for text in (body, detail):
+            assert owner.phone_number not in text
+            assert "landlord_id" not in text

@@ -1,7 +1,7 @@
 from django.core.validators import RegexValidator
 from rest_framework import serializers
 
-from .models import User
+from .models import ConsentRecord, User
 
 # Accepts 07XXXXXXXX, 01XXXXXXXX, or +2547XXXXXXXX / +2541XXXXXXXX.
 phone_validator = RegexValidator(
@@ -28,6 +28,11 @@ class OTPRequestSerializer(serializers.Serializer):
         choices=((User.Role.TENANT, "Tenant"), (User.Role.LANDLORD, "Landlord")),
         required=False,
     )
+    # Required only when this request creates a new account (enforced in the view).
+    accept_terms = serializers.BooleanField(required=False, default=False)
+    # Optional and never bundled with accept_terms.
+    marketing_opt_in = serializers.BooleanField(required=False, default=False)
+    policy_version = serializers.CharField(max_length=40, required=False, allow_blank=True)
 
     def validate_phone_number(self, value):
         return normalize_phone(value)
@@ -49,3 +54,25 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def validate_email(self, value):
         return value.strip().lower()
+
+
+class ConsentSerializer(serializers.Serializer):
+    consent_type = serializers.ChoiceField(choices=ConsentRecord.ConsentType.choices)
+    granted = serializers.BooleanField()
+    policy_version = serializers.CharField(max_length=40, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        # Accepting the Terms/Privacy Policy is a condition of having an account,
+        # so it cannot be "withdrawn" here; the way to withdraw is to request deletion.
+        if attrs["consent_type"] == ConsentRecord.ConsentType.TERMS_PRIVACY and not attrs["granted"]:
+            raise serializers.ValidationError("To withdraw agreement to the Terms, request account deletion instead.")
+        return attrs
+
+
+class DeletionRequestSerializer(serializers.Serializer):
+    # The user must retype their own phone number to confirm; prevents accidental requests.
+    confirm_phone = serializers.CharField(validators=[phone_validator])
+    reason = serializers.CharField(max_length=500, required=False, allow_blank=True)
+
+    def validate_confirm_phone(self, value):
+        return normalize_phone(value)

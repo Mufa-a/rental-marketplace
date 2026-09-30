@@ -17,8 +17,9 @@ from apps.payments.services import reserve_viewing_credit, settle_viewing_credit
 from .models import Outcome, Viewing, ViewingRequest
 from .serializers import ApprovalSerializer, OutcomeSerializer, RequestSerializer, ViewingSerializer
 
-def audit(request, action, obj):
-    AuditLog.objects.create(actor=request.user, action=action, object_type=obj._meta.label, object_id=str(obj.pk))
+def audit(request, action, obj, **metadata):
+    """Append an audit entry. metadata carries e.g. {"from": "pending_landlord", "to": "approved"}."""
+    AuditLog.objects.create(actor=request.user, action=action, object_type=obj._meta.label, object_id=str(obj.pk), metadata=metadata)
 
 def is_landlord_for(user, request):
     return user.role == User.Role.ADMIN or request.unit.property.landlord.user_id == user.id
@@ -54,21 +55,26 @@ class RequestActionView(APIView):
     permission_classes = [IsAuthenticated]
     @transaction.atomic
     def post(self, request, request_id, action):
-        item = get_object_or_404(ViewingRequest.objects.select_related("unit__property__landlord__user"), pk=request_id)
+        item = get_object_or_404(ViewingRequest.objects.select_for_update(of=("self",)).select_related("unit__property__landlord__user"), pk=request_id)
         if action == "cancel":
             if item.tenant.user_id != request.user.id or item.status not in ["pending_landlord", "approved"]: raise PermissionDenied("This request cannot be cancelled.")
             was_pending = item.status == ViewingRequest.Status.PENDING
+            previous_status = item.status
             item.status = ViewingRequest.Status.CANCELLED; item.save(update_fields=["status", "updated_at"])
             if was_pending:
                 settle_viewing_credit(item, restore=True)
             if hasattr(item, "viewing"):
                 item.viewing.status = Viewing.Status.CANCELLED
                 item.viewing.save(update_fields=["status", "updated_at"])
-            audit(request, "viewing_request.cancelled", item); return Response(RequestSerializer(item).data)
+            audit(request, "viewing_request.cancelled", item, **{"from": previous_status, "to": item.status}); return Response(RequestSerializer(item).data)
         if not is_landlord_for(request.user, item): raise PermissionDenied("Only the listing landlord can act on this request.")
         if action == "reject":
             if item.status != ViewingRequest.Status.PENDING: raise ValidationError("Only pending requests may be rejected.")
-            item.status = ViewingRequest.Status.REJECTED; item.landlord_note = request.data.get("note", ""); item.save(); audit(request, "viewing_request.rejected", item)
+            item.status = ViewingRequest.Status.REJECTED
+            item.landlord_note = str(request.data.get("note", ""))[:500]
+            item.responded_at = timezone.now()
+            item.save()
+            audit(request, "viewing_request.rejected", item, **{"from": "pending_landlord", "to": "rejected", "has_note": bool(item.landlord_note)})
             settle_viewing_credit(item, restore=True)
             queue_sms(recipient=item.tenant.user, event="viewing.rejected", dedupe_key=f"viewing-request:{item.pk}:rejected:tenant", message=f"Your viewing request for {item.unit.title} was declined. Browse other available homes in the area.")
             return Response(RequestSerializer(item).data)
@@ -80,9 +86,9 @@ class RequestActionView(APIView):
             serializer = ApprovalSerializer(data=request.data); serializer.is_valid(raise_exception=True)
             if serializer.validated_data["scheduled_at"] <= timezone.now():
                 raise ValidationError({"scheduled_at": "Choose a future viewing time."})
-            item.status = ViewingRequest.Status.APPROVED; item.save()
+            item.status = ViewingRequest.Status.APPROVED; item.responded_at = timezone.now(); item.save()
             settle_viewing_credit(item)
-            viewing = Viewing.objects.create(request=item, scheduled_at=serializer.validated_data["scheduled_at"], meeting_note=serializer.validated_data.get("meeting_note", "")); audit(request, "viewing.scheduled", viewing)
+            viewing = Viewing.objects.create(request=item, scheduled_at=serializer.validated_data["scheduled_at"], meeting_note=serializer.validated_data.get("meeting_note", "")); audit(request, "viewing.scheduled", viewing, request_id=item.pk, **{"from": "pending_landlord", "to": "approved"})
             when = timezone.localtime(viewing.scheduled_at).strftime("%d %b, %I:%M %p")
             queue_sms(recipient=item.tenant.user, event="viewing.approved", dedupe_key=f"viewing:{viewing.pk}:approved:tenant", message=f"Your viewing for {item.unit.title} was approved for {when}.")
             return Response(ViewingSerializer(viewing).data, status=201)
@@ -92,12 +98,12 @@ class ViewingActionView(APIView):
     permission_classes = [IsAuthenticated]
     @transaction.atomic
     def post(self, request, viewing_id, action):
-        viewing = get_object_or_404(Viewing.objects.select_related("request__unit__property__landlord__user", "request__tenant__user"), pk=viewing_id)
+        viewing = get_object_or_404(Viewing.objects.select_for_update(of=("self",)).select_related("request__unit__property__landlord__user", "request__tenant__user"), pk=viewing_id)
         involved = viewing.request.tenant.user_id == request.user.id or is_landlord_for(request.user, viewing.request)
         if not involved: raise PermissionDenied("You are not involved in this viewing.")
         if action == "complete":
             if viewing.status != Viewing.Status.SCHEDULED: raise ValidationError("Only scheduled viewings may be completed.")
-            viewing.status = Viewing.Status.OUTCOME_PENDING; viewing.completed_at = timezone.now(); viewing.save(); audit(request, "viewing.completed", viewing); return Response(ViewingSerializer(viewing).data)
+            viewing.status = Viewing.Status.OUTCOME_PENDING; viewing.completed_at = timezone.now(); viewing.save(); audit(request, "viewing.completed", viewing, **{"from": "scheduled", "to": "outcome_pending", "actor_role": request.user.role}); return Response(ViewingSerializer(viewing).data)
         if action == "outcome":
             if viewing.status == Viewing.Status.SCHEDULED and viewing.scheduled_at <= timezone.now():
                 viewing.status = Viewing.Status.OUTCOME_PENDING
@@ -128,7 +134,7 @@ class ViewingActionView(APIView):
                 viewing.status = Viewing.Status.OUTCOME_PENDING
             else:
                 viewing.status = serializer.validated_data["choice"]
-            viewing.save(update_fields=["status", "updated_at"]); audit(request, "viewing.outcome_reported", outcome)
+            viewing.save(update_fields=["status", "updated_at"]); audit(request, "viewing.outcome_reported", outcome, choice=outcome.choice, actor_role=request.user.role, viewing_status=viewing.status)
             if landlord_reported_rented:
                 from apps.referrals.services import create_fee_for_rented_viewing
                 fee, _ = create_fee_for_rented_viewing(viewing)

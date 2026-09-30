@@ -30,6 +30,10 @@ class OTPInvalid(Exception):
     """Code is wrong, expired, already used, or none was requested."""
 
 
+class AccountSuspended(Exception):
+    """A previously verified account has been deactivated by an administrator."""
+
+
 def generate_otp_code() -> str:
     return f"{secrets.randbelow(10 ** OTP_LENGTH):0{OTP_LENGTH}d}"
 
@@ -75,6 +79,10 @@ def _deliver(phone_number: str, code: str) -> None:
 
 
 def verify_otp(user: User, submitted_code: str) -> None:
+    # A verified account that is inactive was deactivated by an administrator.
+    # Passing OTP must never silently re-enable it.
+    if user.phone_verified and not user.is_active:
+        raise AccountSuspended("This account is not available.")
     otp = (
         OTPCode.objects.filter(user=user, used_at__isnull=True)
         .order_by("-created_at")
@@ -98,6 +106,7 @@ def verify_otp(user: User, submitted_code: str) -> None:
 
     otp.used_at = timezone.now()
     otp.save(update_fields=["used_at"])
-    user.phone_verified = True
-    user.is_active = True
-    user.save(update_fields=["phone_verified", "is_active"])
+    if not user.phone_verified:
+        user.phone_verified = True
+        user.is_active = True
+        user.save(update_fields=["phone_verified", "is_active"])

@@ -109,7 +109,14 @@ REST_FRAMEWORK = {
         "otp_request": "3/15min",
         "login": "10/min",
         "viewing_request": "20/hour",
+        "public_search": "120/min",
+        "report": "10/hour",
+        "deletion_request": "5/day",
     },
+    # Set to the number of reverse proxies in front of Django (e.g. 1 behind
+    # Caddy/nginx) so throttling keys on the real client IP. 0 = trust only
+    # REMOTE_ADDR, which is the safe default when Django is exposed directly.
+    "NUM_PROXIES": env.int("NUM_PROXIES", default=0),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.CursorPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
@@ -164,3 +171,13 @@ MPESA_CALLBACK_URL = env("MPESA_CALLBACK_URL", default="")
 MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", default="")
 
 SENTRY_DSN = env("SENTRY_DSN", default="")
+
+# ---- Legal / consent ----
+# Bump LEGAL_POLICY_VERSION whenever the Terms or Privacy Policy change in a
+# way users should re-accept. It is stored with every ConsentRecord. Keep it in
+# sync with frontend/lib/legal.ts (LEGAL_VERSION).
+LEGAL_POLICY_VERSION = env("LEGAL_POLICY_VERSION", default="draft-1")
+
+# ---- Admin URL ----
+# Django admin path; override in production to something non-default.
+ADMIN_URL = env("ADMIN_URL", default="admin/")

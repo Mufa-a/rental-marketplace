@@ -91,3 +91,57 @@ class LandlordProfile(models.Model):
         default="basic",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ConsentRecord(models.Model):
+    """Append-only history of what a user agreed to, and which policy version they saw.
+
+    A withdrawal is a new row with granted=False; earlier rows are never edited,
+    so the latest row per (user, consent_type) is the current state.
+    """
+
+    class ConsentType(models.TextChoices):
+        TERMS_PRIVACY = "terms_privacy", "Terms & Conditions and Privacy Policy"
+        MARKETING = "marketing", "Marketing communications"
+        ANALYTICS = "analytics", "Optional analytics"
+        LOCATION = "location", "Location-based search"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="consents")
+    consent_type = models.CharField(max_length=20, choices=ConsentType.choices)
+    granted = models.BooleanField()
+    policy_version = models.CharField(max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "consent_type", "-created_at"], name="consent_user_type_idx")]
+        ordering = ("-created_at", "-id")
+
+
+class AccountDeletionRequest(models.Model):
+    """A user's request to delete their account, processed by a human admin.
+
+    Deletion is not automated: some records (payments, audit logs, viewing
+    outcomes tied to fees) may need to be retained, so an administrator
+    reviews each request. The row deliberately survives user deletion.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending review"
+        CANCELLED = "cancelled", "Cancelled by user"
+        COMPLETED = "completed", "Completed"
+        REJECTED = "rejected", "Rejected / retained"
+
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="deletion_requests")
+    phone_last4 = models.CharField(max_length=4, blank=True)
+    role = models.CharField(max_length=10, blank=True)
+    reason = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    admin_note = models.CharField(max_length=500, blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-requested_at",)
+        constraints = [
+            models.UniqueConstraint(fields=("user",), condition=models.Q(status="pending"), name="one_pending_deletion_request_per_user"),
+        ]
