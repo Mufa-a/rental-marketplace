@@ -7,6 +7,7 @@ import NearbyMap from "@/components/NearbyMap";
 import SiteHeader from "@/components/SiteHeader";
 import VerificationBadge from "@/components/VerificationBadge";
 import HeroArt from "@/components/HeroArt";
+import SafetyTips from "@/components/SafetyTips";
 
 type Unit = {
   id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string;
@@ -148,7 +149,14 @@ export default function Home() {
       <div className="how-head"><p className="eyebrow">How it works</p><h2 id="how-title">From search to keys, in three clear steps.</h2></div>
       <div className="steps">{STEPS.map((step, index) => <article className="glass step" key={step.title}><span className="step-num" aria-hidden="true">{index + 1}</span><h3>{step.title}</h3><p>{step.body}</p></article>)}</div>
     </section>
+    <section className="audience" aria-label="For tenants and landlords">
+      <article className="glass audience-card"><p className="eyebrow">For tenants</p><h2>Look freely, ask when you are ready</h2><ul><li>Browse homes for free, with the monthly rent up front.</li><li>Request a viewing and follow its status from your dashboard.</li><li>Agree rent, deposit and lease directly with the landlord.</li></ul><Link className="button button-small" href="/login">Create a tenant account</Link></article>
+      <article className="glass audience-card"><p className="eyebrow">For landlords</p><h2>Reach tenants who want to view</h2><ul><li>List each unit with photos, rent and availability.</li><li>Approve or decline viewing requests and schedule the time.</li><li>Every request and outcome is recorded for both sides.</li></ul><Link className="button button-small" href="/login">List a home</Link></article>
+    </section>
+    <section className="glass trust-section" aria-labelledby="trust-title">
+      <div className="how-head"><p className="eyebrow">Trust &amp; safety</p><h2 id="trust-title">Rent with your eyes open.</h2><p className="muted">Nyumbani connects tenants and landlords. We do not own or inspect the homes, so a few habits keep everyone safe.</p></div>
+      <SafetyTips compact />
+    </section>
     <section className="glass cta-band"><div><h2>Own a property in Kenya?</h2><p>List your units, receive viewing requests from real tenants, and manage everything from one dashboard.</p></div><Link className="button" href="/login">List a home</Link></section>
-    <footer className="site-footer"><span>Nyumbani · Rent with more certainty.</span><div><Link href="/login">List a home</Link><Link href="/login">Sign in</Link></div></footer>
   </main>;
 }
