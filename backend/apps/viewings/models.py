@@ -16,6 +16,7 @@ class ViewingRequest(models.Model):
     note = models.CharField(max_length=500, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     landlord_note = models.CharField(max_length=500, blank=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

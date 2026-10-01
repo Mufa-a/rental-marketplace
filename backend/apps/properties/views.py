@@ -9,6 +9,7 @@ import boto3
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
+from django.db.models import ProtectedError
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -17,6 +18,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.pagination import CursorPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import LandlordProfile, User
@@ -38,6 +40,22 @@ def _profile_for(request):
 
 def _audit(request, action, obj):
     AuditLog.objects.create(actor=request.user, action=action, object_type=obj._meta.label, object_id=str(obj.pk))
+
+
+def _delete_or_conflict(request, obj, action, what, alternative):
+    """Delete obj unless viewing history references it; never a 500, never a silent loss of records."""
+    object_pk = obj.pk
+    label = obj._meta.label
+    try:
+        obj.delete()
+    except ProtectedError:
+        return Response(
+            {"error": {"code": "has_history", "message": f"This {what} has viewing or payment history, so it can't be deleted. {alternative}"}},
+            status=status.HTTP_409_CONFLICT,
+        )
+    AuditLog.objects.create(actor=request.user, action=action, object_type=label, object_id=str(object_pk))
+    _invalidate_public_listing_cache()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 def _invalidate_public_listing_cache():
@@ -108,6 +126,8 @@ class SavedUnitDetailView(APIView):
 class PublicUnitSearchView(APIView):
     """Public, availability-only listing query used by the Phase 4 search UI."""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "public_search"
 
     class FiltersSerializer(serializers.Serializer):
         city = serializers.CharField(max_length=100, required=False)
@@ -196,7 +216,10 @@ class PublicUnitSearchView(APIView):
         page = paginator.paginate_queryset(units, request, view=self)
         data = UnitSerializer(page, many=True).data
         for item, unit in zip(data, page):
-            item["property"] = {"area": unit.property.area, "city": unit.property.city}
+            item["property"] = {
+                "area": unit.property.area, "city": unit.property.city,
+                "verification_status": unit.property.verification_status,
+            }
             if unit.property.location:
                 # Approximate public map pins to protect the exact home entrance location.
                 item["property"]["latitude"] = round(unit.property.location.latitude, 3)
@@ -219,6 +242,7 @@ class PublicUnitDetailView(APIView):
         data["property"] = {
             "name": unit.property.name, "area": unit.property.area, "city": unit.property.city,
             "county": unit.property.county, "country": unit.property.country,
+            "verification_status": unit.property.verification_status,
         }
         return Response(data)
 
@@ -258,10 +282,7 @@ class PropertyDetailView(APIView):
 
     def delete(self, request, property_id):
         property = _owned_property(request, property_id)
-        _audit(request, "property.deleted", property)
-        property.delete()
-        _invalidate_public_listing_cache()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return _delete_or_conflict(request, property, "property.deleted", "property", "Set it to inactive instead to hide it from search.")
 
 
 class UnitListCreateView(APIView):
@@ -298,10 +319,7 @@ class UnitDetailView(APIView):
 
     def delete(self, request, unit_id):
         unit = _owned_unit(request, unit_id)
-        _audit(request, "unit.deleted", unit)
-        unit.delete()
-        _invalidate_public_listing_cache()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return _delete_or_conflict(request, unit, "unit.deleted", "home", "Mark it as not available or unpublish it instead.")
 
 
 class UnitAvailabilityView(APIView):

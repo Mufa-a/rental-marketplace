@@ -6,7 +6,10 @@ type SearchPage = { next?: string | null; results?: Listing[] };
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
-  const entries: MetadataRoute.Sitemap = [{ url: site, changeFrequency: "daily", priority: 1 }];
+  const entries: MetadataRoute.Sitemap = [
+    { url: site, changeFrequency: "daily", priority: 1 },
+    ...["terms", "privacy", "cookies", "data-protection", "copyright", "contact"].map((page) => ({ url: `${site}/${page}`, changeFrequency: "yearly" as const, priority: 0.3 })),
+  ];
   let next: string | null = `${api}/properties/search/`;
   let pages = 0;
   while (next && pages < 20) {

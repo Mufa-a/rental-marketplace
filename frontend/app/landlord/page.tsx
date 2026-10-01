@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, signOut } from "@/lib/api";
 import { stripImageMetadata } from "@/lib/images";
 import PropertyLocationEditor from "@/components/PropertyLocationEditor";
+import SiteHeader from "@/components/SiteHeader";
 
 type Property = { id: number; name: string; area: string; city: string; latitude: number | null; longitude: number | null };
 type Unit = { id: number; property_id: number; title: string; description: string; unit_number: string; slug: string; monthly_rent: number; bedrooms: number; available: boolean; is_published: boolean };
@@ -155,7 +156,19 @@ export default function LandlordDashboard() {
 
   const pending = requests.filter(item => item.status === "pending_landlord");
   const reportsDue = requests.filter(item => item.viewing && (item.viewing.status === "outcome_pending" || (item.viewing.status === "scheduled" && new Date(item.viewing.scheduled_at).getTime() <= Date.now())));
-  return <main className="shell"><header className="topnav"><Link href="/" className="brand">Nyumbani</Link><nav className="nav-actions"><Link className="navlink" href="/profile">Profile</Link><button className="button-secondary" onClick={signOut}>Sign out</button></nav></header>
+  const totalUnits = listings.reduce((total, item) => total + item.units.length, 0);
+  const activeUnits = listings.reduce((total, item) => total + item.units.filter(u => u.is_published && u.available).length, 0);
+  const upcomingViewings = requests.filter(item => item.viewing && item.viewing.status === "scheduled" && new Date(item.viewing.scheduled_at).getTime() > Date.now()).length;
+  const overview = [
+    ["Properties", listings.length, "sage"],
+    ["Units", totalUnits, "sage"],
+    ["Active listings", activeUnits, "gold"],
+    ["Viewing requests awaiting reply", pending.length, pending.length > 0 ? "danger" : "sage"],
+    ["Upcoming viewings", upcomingViewings, "gold"],
+    ["Success fees pending", fees.filter(f => f.status === "pending").length, "gold"],
+  ] as [string, number, string][];
+  return <main className="shell"><SiteHeader right={<><Link className="navlink" href="/profile">Profile</Link><button className="button-secondary" onClick={signOut}>Sign out</button></>} />
+    {!loading && listings.length > 0 && <section className="admin-metrics" aria-label="Portfolio overview">{overview.map(([title, value, accent]) => <article className={`glass admin-metric accent-${accent}`} key={title}><span className="muted">{title}</span><strong>{value}</strong></article>)}</section>}
     {reportsDue.length > 0 && <section className="glass activity-card outcome-first"><p className="eyebrow">Action needed first</p><h2>Report the viewing result</h2><p className="muted">If you rented this unit, report it here. We will take it off the marketplace and send an M-Pesa success-fee prompt to your registered phone.</p>{reportsDue.map(item => <div className="outcome-first-row" key={item.viewing!.id}><div><strong>{item.unit_title || `Home #${item.unit}`}</strong><p className="muted">{item.property_name} · KSh {Number(item.monthly_rent).toLocaleString()} / month</p></div><div className="outcome-actions"><button onClick={() => void updateViewing(item.viewing!.id, "outcome", "rented")}>Rented this home</button><button className="button-secondary" onClick={() => void updateViewing(item.viewing!.id, "outcome", "did_not_rent")}>Did not rent</button><button className="button-secondary" onClick={() => void updateViewing(item.viewing!.id, "outcome", "still_deciding")}>Still deciding</button></div></div>)}</section>}
     <section className="dashboard-intro"><p className="eyebrow">Landlord dashboard</p><h1>Manage your homes</h1><p className="muted">Keep your listings current and respond to viewing requests from one place.</p><button onClick={() => setShowForm(value => !value)}>{showForm ? "Close listing form" : "Add a home"}</button></section>
     <section className="dashboard-content"><div className="section-heading"><div><p className="eyebrow">Landlord success fees</p><h2>Referral fees</h2></div></div>{fees.length === 0 && <p className="muted">A fee is created when you report that a viewing converted to a rental, and the M-Pesa prompt is sent automatically.</p>}{fees.map(fee => <article className="glass activity-card" key={fee.id}><div className="activity-heading"><div><span className={`status status-${fee.status}`}>{fee.status}</span><h3>{fee.unit_title}</h3><p className="muted">KSh {fee.amount.toLocaleString()}{fee.due_at ? ` · Due ${new Date(fee.due_at).toLocaleDateString()}` : ""}</p></div>{fee.status === "pending" && <button disabled={payingFeeId === fee.id || !paymentPhone.trim()} onClick={() => void payReferralFee(fee.id)}>{payingFeeId === fee.id ? "Connecting…" : "Pay with M-Pesa"}</button>}</div>{fee.status === "pending" && <label>M-Pesa phone number<input type="tel" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={event => setPaymentPhone(event.target.value)} placeholder="0712345678" aria-label="M-Pesa phone number" /></label>}</article>)}</section>

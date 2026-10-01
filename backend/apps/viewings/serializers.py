@@ -12,11 +12,12 @@ class RequestSerializer(serializers.ModelSerializer):
     property_name = serializers.CharField(source="unit.property.name", read_only=True)
     area = serializers.CharField(source="unit.property.area", read_only=True)
     monthly_rent = serializers.IntegerField(source="unit.monthly_rent", read_only=True)
+    unit_available = serializers.BooleanField(source="unit.available", read_only=True)
 
     class Meta:
         model = ViewingRequest
-        fields = ("id", "unit", "unit_title", "property_name", "area", "monthly_rent", "preferred_times", "note", "status", "landlord_note", "viewing", "created_at", "updated_at")
-        read_only_fields = ("id", "status", "landlord_note", "viewing", "created_at", "updated_at")
+        fields = ("id", "unit", "unit_title", "property_name", "area", "monthly_rent", "unit_available", "preferred_times", "note", "status", "landlord_note", "responded_at", "viewing", "created_at", "updated_at")
+        read_only_fields = ("id", "status", "landlord_note", "responded_at", "viewing", "created_at", "updated_at")
 
     def get_viewing(self, obj):
         try:
