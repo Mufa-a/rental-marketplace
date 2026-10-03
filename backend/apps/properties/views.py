@@ -22,6 +22,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import LandlordProfile, User
+from botocore.config import Config
 from apps.core.models import AuditLog
 
 from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit
@@ -137,6 +138,7 @@ class PublicUnitSearchView(APIView):
         bedrooms = serializers.IntegerField(min_value=0, required=False)
         amenity = serializers.SlugField(max_length=90, required=False)
         unit_type = serializers.ChoiceField(choices=Unit.UnitType.choices, required=False)
+        furnishing = serializers.ChoiceField(choices=Unit.Furnishing.choices, required=False)
         move_in_date = serializers.DateField(required=False)
         latitude = serializers.FloatField(min_value=-90, max_value=90, required=False)
         longitude = serializers.FloatField(min_value=-180, max_value=180, required=False)
@@ -179,6 +181,8 @@ class PublicUnitSearchView(APIView):
             units = units.filter(bedrooms=params["bedrooms"]) if params["bedrooms"] == 0 else units.filter(bedrooms__gte=params["bedrooms"])
         if "unit_type" in params:
             units = units.filter(unit_type=params["unit_type"])
+        if "furnishing" in params:
+            units = units.filter(furnishing=params["furnishing"])
         if "move_in_date" in params:
             units = units.filter(Q(available_from__isnull=True) | Q(available_from__lte=params["move_in_date"]))
         if "amenity" in params:
@@ -202,17 +206,58 @@ class PublicUnitSearchView(APIView):
                         if 6371 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) <= params["radius_km"]:
                             property_ids.append(property_id)
                 units = units.filter(property_id__in=property_ids)
-        if params.get("ordering") == "distance" and connection.vendor == "postgresql":
-            from django.contrib.gis.db.models.functions import Distance
-            from django.contrib.gis.geos import Point
-            center = Point(params["longitude"], params["latitude"], srid=4326)
-            units = units.annotate(distance=Distance("property__location", center)).order_by("distance", "id")
+
+        from django.db.models import Case, IntegerField, When
+        units = units.annotate(
+            verified_rank=Case(
+                When(property__verification_status=Property.VerificationStatus.VERIFIED, then=0),
+                default=1,
+                output_field=IntegerField(),
+            )
+        )
+        ordering = params["ordering"]
+        requested_ordering = ordering
+        if ordering == "distance":
+            if connection.vendor == "postgresql":
+                from django.db.models import F, FloatField, Func, Value
+
+                class AsGeography(Func):
+                    template = "%(expressions)s::geography"
+
+                center = AsGeography(
+                    Func(
+                        Func(Value(float(params["longitude"])), Value(float(params["latitude"])), function="ST_MakePoint"),
+                        Value(4326),
+                        function="ST_SetSRID",
+                    )
+                )
+                units = units.annotate(
+                    distance=Func(F("property__location"), center, function="ST_Distance", output_field=FloatField())
+                ).distinct()
+            else:
+                from django.db.models import Case, FloatField, Value, When
+                from .fields import GeographicPoint
+
+                distance_cases = []
+                for property_id, point in Property.objects.exclude(location__isnull=True).values_list("id", "location"):
+                    if not isinstance(point, GeographicPoint):
+                        continue
+                    dlat = math.radians(point.latitude - params["latitude"])
+                    dlon = math.radians(point.longitude - params["longitude"])
+                    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(params["latitude"])) * math.cos(math.radians(point.latitude)) * math.sin(dlon / 2) ** 2
+                    distance_km = 6371 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                    distance_cases.append(When(property_id=property_id, then=Value(distance_km)))
+                distance = Case(*distance_cases, default=Value(1e12), output_field=FloatField())
+                units = units.annotate(distance=distance).distinct()
         else:
-            ordering = params["ordering"]
-            units = units.distinct().order_by("-created_at" if ordering == "distance" else ordering, "id")
+            units = units.distinct()
+        sort_fields = ("distance", "id") if requested_ordering == "distance" else (ordering, "id")
+        if requested_ordering in ("-created_at", "distance"):
+            sort_fields = ("verified_rank",) + sort_fields
+        units = units.order_by(*sort_fields)
         paginator = CursorPagination()
         paginator.page_size = 20
-        paginator.ordering = (params["ordering"], "id")
+        paginator.ordering = sort_fields
         page = paginator.paginate_queryset(units, request, view=self)
         data = UnitSerializer(page, many=True).data
         for item, unit in zip(data, page):
@@ -383,7 +428,7 @@ class MediaDetailView(APIView):
 
 
 class MediaPresignView(APIView):
-    """Return a short-lived R2 form POST; the image never passes through Django."""
+    """Return a short-lived R2 presigned PUT; the image never passes through Django."""
     permission_classes = [IsLandlordOrAdmin]
 
     def post(self, request, unit_id):
@@ -394,6 +439,19 @@ class MediaPresignView(APIView):
             raise ValidationError("R2 storage is not configured.")
         extension = os.path.splitext(serializer.validated_data["filename"])[1].lower()
         asset_key = f"properties/{unit.id}/{uuid4().hex}{extension}"
-        client = boto3.client("s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL, aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY)
-        upload = client.generate_presigned_post(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key, Fields={"Content-Type": serializer.validated_data["content_type"]}, Conditions=[{"Content-Type": serializer.validated_data["content_type"]}, ["content-length-range", 1, 10 * 1024 * 1024]], ExpiresIn=300)
-        return Response({"asset_key": asset_key, "upload": upload, "expires_in_seconds": 300})
+        client = boto3.client(
+            "s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL,
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name="auto", config=Config(signature_version="s3v4"),
+        )
+        content_type = serializer.validated_data["content_type"]
+        upload_url = client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": asset_key, "ContentType": content_type},
+            ExpiresIn=300,
+        )
+        return Response({
+            "asset_key": asset_key,
+            "upload": {"url": upload_url, "method": "PUT", "headers": {"Content-Type": content_type}},
+            "expires_in_seconds": 300,
+        })

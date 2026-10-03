@@ -225,3 +225,104 @@
 th button.th-sort{all:unset;cursor:pointer;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit}th button.th-sort:hover{color:var(--ink);text-decoration:underline}
 .status-strip{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}.status-strip span{font-size:12px}
 @media(max-width:700px){.audience{grid-template-columns:1fr}.legal-toc ol{columns:1}.legal-footer{padding:0 16px 32px}.legal-doc{border-radius:18px}}
+/* ============================================================
+   Light theme (applied via <html data-theme="light">)
+   ============================================================ */
+:root[data-theme="light"]{
+  color-scheme:light;
+  --gold:#a8650a;--gold-hover:#8f5508;--sage:#2f7d5b;--night:#f4f1ea;
+  --ink:#17242b;--muted:#55646b;--line:rgba(23,36,43,.14);
+  --surface:rgba(255,255,255,.62);--surface-hover:rgba(255,255,255,.92);
+  --danger:#b42318;--danger-strong:#d92d20;--shadow:0 18px 56px rgba(30,45,50,.12);
+}
+[data-theme="light"] body{background:radial-gradient(ellipse at 10% 0%,#cfe9dc 0,transparent 40%),radial-gradient(ellipse at 100% 0%,#f8e3bd 0,transparent 32%),var(--night)}
+
+/* Buttons keep the bright gold fill */
+[data-theme="light"] .button,[data-theme="light"] button{background:#f5bd68;color:#1d2a30}
+[data-theme="light"] .button:hover,[data-theme="light"] button:hover{background:#f0ad45}
+[data-theme="light"] .button-secondary{background:transparent;color:var(--ink)}
+[data-theme="light"] .button-secondary:hover{background:var(--surface-hover)}
+[data-theme="light"] .button-danger{background:#d92d20;color:#fff}
+[data-theme="light"] .chip{background:rgba(255,255,255,.7);color:var(--ink)}
+[data-theme="light"] .chip:hover{background:rgba(245,189,104,.3)}
+[data-theme="light"] .chip[aria-pressed="true"]{background:#f5bd68;color:#241a08;border-color:#f5bd68}
+[data-theme="light"] .bundle-grid button{background:rgba(255,255,255,.7);color:var(--ink)}
+[data-theme="light"] .tabbar button{background:transparent;color:var(--muted)}
+[data-theme="light"] .tabbar button[aria-selected="true"]{background:#fff;color:var(--ink)}
+[data-theme="light"] .sheet-close{background:transparent}
+
+/* Inputs */
+[data-theme="light"] input,[data-theme="light"] select,[data-theme="light"] textarea{background:#fff;color:#17242b;border-color:var(--line)}
+
+/* Dark translucent panels -> light translucent */
+[data-theme="light"] .search-panel,
+[data-theme="light"] .request-message,
+[data-theme="light"] .legal-toc,
+[data-theme="light"] .safety-tips div,
+[data-theme="light"] .tabbar{background:rgba(255,255,255,.6)}
+[data-theme="light"] .hero-pill{background:rgba(255,255,255,.6)}
+[data-theme="light"] .art-chip{background:rgba(255,255,255,.88);color:var(--ink)}
+
+/* Images / placeholders */
+[data-theme="light"] .listing-image,
+[data-theme="light"] .detail-gallery img{background:#dfe8e2}
+[data-theme="light"] .image-placeholder,
+[data-theme="light"] .detail-no-image{background:linear-gradient(135deg,#cfe3d8,#ecd9b0)}
+[data-theme="light"] .image-placeholder span{color:rgba(23,36,43,.55)}
+
+/* Status + badges (light text on dark -> dark text on light) */
+[data-theme="light"] .status,
+[data-theme="light"] .badge-verified,
+[data-theme="light"] .tone-approved{background:rgba(47,125,91,.14);color:#1f6b49}
+[data-theme="light"] .tone-rejected{color:#b42318}
+[data-theme="light"] .tone-completed{background:rgba(42,86,184,.12);color:#2a56b8}
+[data-theme="light"] .badge-unverified,
+[data-theme="light"] .badge-low,
+[data-theme="light"] .status-paused,
+[data-theme="light"] .tone-cancelled,
+[data-theme="light"] .tone-neutral{background:rgba(23,36,43,.07);color:var(--muted)}
+[data-theme="light"] .notice{background:rgba(217,45,32,.07)}
+
+/* Misc */
+[data-theme="light"] .step-num{-webkit-text-stroke:1px rgba(168,101,10,.7)}
+[data-theme="light"] .listing-card:hover{box-shadow:0 22px 50px rgba(30,45,50,.18)}
+[data-theme="light"] .legal-section p,[data-theme="light"] .legal-section li{color:var(--ink)}
+[data-theme="light"] .legal-placeholder{background:rgba(217,45,32,.14);color:#9a2a1c}
+[data-theme="light"] .filter-sheet.is-open{box-shadow:0 -18px 40px rgba(30,45,50,.2)}
+[data-theme="light"] .leaflet-popup-content-wrapper,
+[data-theme="light"] .leaflet-popup-tip{background:#fff;color:var(--ink)}
+[data-theme="light"] .leaflet-popup-content a{color:var(--gold)}
+
+/* Theme toggle button (works in both themes) */
+.theme-toggle{min-height:40px;width:40px;padding:0;border-radius:999px;background:var(--surface);color:var(--ink);border:1px solid var(--line);font-size:16px}
+.theme-toggle:hover{background:var(--surface-hover);transform:none}
+.theme-toggle-fixed{position:fixed;top:14px;right:14px;z-index:50}
+@media(max-width:620px){.theme-toggle-fixed{top:10px;right:10px}}
+/* Fix mobile overflow in admin */
+html,body{max-width:100%;overflow-x:hidden}
+.shell,.admin-shell,.admin-layout>*,.dashboard-content{min-width:0}
+
+@media(max-width:900px){
+  .admin-layout{grid-template-columns:minmax(0,1fr)}
+}
+
+/* Tabs scroll sideways inside their own box instead of widening the page */
+.tabbar{max-width:100%;width:auto;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.tabbar::-webkit-scrollbar{display:none}
+.tabbar button{flex:0 0 auto;white-space:nowrap}
+
+/* Tables already scroll inside .admin-table-wrap; make sure the wrap can shrink */
+.admin-table-wrap{max-width:100%}
+
+/* One card per row on small phones so labels aren't clipped */
+@media(max-width:480px){
+  .admin-metrics{grid-template-columns:minmax(0,1fr)}
+  .focus-grid{grid-template-columns:minmax(0,1fr)}
+}
+
+.credit-balance{display:inline-flex;align-items:center;gap:8px;margin:0 0 16px;padding:7px 14px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:13px;color:var(--muted)}
+.credit-balance strong{color:var(--gold);font-size:16px}
+.verify-box{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0}
+.verify-box input{width:180px;max-width:100%}
+.verify-box .muted{flex-basis:100%;margin:0;font-size:12px}
+[hidden]{display:none!important}

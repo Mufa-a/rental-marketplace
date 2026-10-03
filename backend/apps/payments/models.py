@@ -4,6 +4,7 @@ class Payment(models.Model):
     class Purpose(models.TextChoices):
         REFERRAL_FEE = "referral_fee", "Landlord referral fee"
         VIEWING_CREDITS = "viewing_credits", "Tenant viewing credits"
+        VERIFICATION_FEE = "verification_fee", "Property verification fee"
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
         SUCCESSFUL = "successful", "Successful"
@@ -13,6 +14,7 @@ class Payment(models.Model):
     fee = models.ForeignKey("referrals.ReferralFee", on_delete=models.PROTECT, related_name="payments", null=True, blank=True)
     purpose = models.CharField(max_length=20, choices=Purpose.choices, default=Purpose.REFERRAL_FEE)
     tenant_user = models.ForeignKey("accounts.User", on_delete=models.PROTECT, related_name="viewing_credit_payments", null=True, blank=True)
+    property = models.ForeignKey("properties.Property", on_delete=models.PROTECT, related_name="verification_payments", null=True, blank=True)
     credits = models.PositiveSmallIntegerField(null=True, blank=True)
     amount = models.PositiveIntegerField()
     phone_number = models.CharField(max_length=20)

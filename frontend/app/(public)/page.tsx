@@ -10,12 +10,13 @@ import HeroArt from "@/components/HeroArt";
 import SafetyTips from "@/components/SafetyTips";
 
 type Unit = {
-  id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string;
+  id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string; furnishing: string;
   distance_km: number | null; media: { url: string; alt_text: string }[];
   property: { area: string; city: string; latitude?: number; longitude?: number; verification_status?: string };
 };
-type Filters = { area: string; city: string; min_rent: string; max_rent: string; bedrooms: string; unit_type: string; amenity: string; ordering: string };
-const DEFAULT_FILTERS: Filters = { area: "", city: "", min_rent: "", max_rent: "", bedrooms: "", unit_type: "", amenity: "", ordering: "-created_at" };
+type Filters = { area: string; city: string; min_rent: string; max_rent: string; bedrooms: string; unit_type: string; furnishing: string; amenity: string; ordering: string };
+const DEFAULT_FILTERS: Filters = { area: "", city: "", min_rent: "", max_rent: "", bedrooms: "", unit_type: "", furnishing: "", amenity: "", ordering: "-created_at" };
+const FURNISHING_LABELS: Record<string, string> = { furnished: "Furnished", unfurnished: "Unfurnished", semi_furnished: "Semi-furnished" };
 const POPULAR_AREAS = ["Kilimani", "Westlands", "Kileleshwa", "Lavington", "Kasarani", "Ruaka", "Syokimau", "Nyali"];
 const STEPS = [
   { title: "Search your way", body: "Filter by area, rent, bedrooms and amenities, or let us find homes near your current location." },
@@ -126,6 +127,7 @@ export default function Home() {
           <label>Max. rent<input type="number" min="1" value={filters.max_rent} onChange={e => setFilters({ ...filters, max_rent: e.target.value })} placeholder="KSh" /></label>
           <label>Bedrooms<select value={filters.bedrooms} onChange={e => setFilters({ ...filters, bedrooms: e.target.value })}><option value="">Any</option>{[0,1,2,3,4].map(n => <option value={n} key={n}>{n === 0 ? "Bedsitter / studio" : `${n}+`}</option>)}</select></label>
           <label>Home type<select value={filters.unit_type} onChange={e => setFilters({ ...filters, unit_type: e.target.value })}><option value="">Any type</option><option value="bedsitter">Bedsitter</option><option value="studio">Studio</option><option value="apartment">Apartment</option><option value="house">House</option><option value="maisonette">Maisonette</option><option value="room">Room</option></select></label>
+          <label>Furnishing<select value={filters.furnishing} onChange={e => setFilters({ ...filters, furnishing: e.target.value })}><option value="">Any</option><option value="furnished">Furnished</option><option value="unfurnished">Unfurnished</option><option value="semi_furnished">Semi-furnished</option></select></label>
           <label>Amenity<select value={filters.amenity} onChange={e => setFilters({ ...filters, amenity: e.target.value })}><option value="">Any</option>{amenities.map(item => <option value={item.slug} key={item.id}>{item.name}</option>)}</select></label>
           <label>Sort by<select value={nearby ? "distance" : filters.ordering} onChange={e => setFilters({ ...filters, ordering: e.target.value })} disabled={Boolean(nearby)}><option value="-created_at">Newest</option><option value="monthly_rent">Price: low to high</option><option value="-monthly_rent">Price: high to low</option><option value="bedrooms">Bedrooms</option><option value="distance" disabled={!nearby}>Nearest first (use Homes near me)</option></select></label>
           <button type="button" className="button sheet-apply" onClick={() => { setFiltersOpen(false); void search(); }}>Show homes</button>
@@ -140,7 +142,7 @@ export default function Home() {
       {!loading && nearby && mapVisible && <NearbyMap units={units} center={nearby} />}
       {!loading && units.length > 0 && <div className="listing-grid">{units.map(unit => <Link key={unit.id} href={`/listings/${encodeURIComponent(unit.property.city.toLowerCase())}/${encodeURIComponent(unit.property.area.toLowerCase())}/${unit.slug}`} className="glass listing-card">
         {unit.media[0]?.url ? <img className="listing-image" src={unit.media[0].url} alt={unit.media[0].alt_text || `${unit.title} rental home`} /> : <div className="listing-image image-placeholder" aria-hidden="true"><HomeGlyph /></div>}
-        <div className="listing-card-content"><div className="badge-row"><span className="status">Available</span><VerificationBadge status={unit.property.verification_status} /></div><p className="muted location">{unit.property.area}, {unit.property.city}{unit.distance_km !== null && unit.distance_km !== undefined ? ` · ${unit.distance_km} km away` : ""}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong><p className="muted">{unit.bedrooms === 0 ? "Bedsitter" : `${unit.bedrooms} bedroom${unit.bedrooms === 1 ? "" : "s"}`} · {unit.bathrooms} bath</p></div>
+        <div className="listing-card-content"><div className="badge-row"><span className="status">Available</span><VerificationBadge status={unit.property.verification_status} /></div><p className="muted location">{unit.property.area}, {unit.property.city}{unit.distance_km !== null && unit.distance_km !== undefined ? ` · ${unit.distance_km} km away` : ""}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong><p className="muted">{unit.bedrooms === 0 ? "Bedsitter" : `${unit.bedrooms} bedroom${unit.bedrooms === 1 ? "" : "s"}`} · {unit.bathrooms} bath · {FURNISHING_LABELS[unit.furnishing] ?? unit.furnishing}</p></div>
       </Link>)}</div>}
       {!loading && units.length === 0 && <div className="glass empty empty-state"><HomeGlyph /><h3>{failed ? "Couldn't load homes" : filtered ? "No matching homes" : "No homes listed yet"}</h3><p>{failed ? "Check that the backend is running, then try again." : filtered ? "Nothing matches those filters right now. Try a wider area or rent range." : "New rentals appear here as landlords publish them. Check back soon, or list your own."}</p><div className="empty-actions">{filtered && <button type="button" className="button button-secondary" onClick={clearFilters}>Clear filters</button>}{failed && <button type="button" className="button button-secondary" onClick={() => void search()}>Try again</button>}<Link className="button button-small" href="/login">List a home</Link></div></div>}
       {!loading && searched && units.length > 0 && hasMore && <button className="button button-secondary load-more" onClick={() => void search(undefined, page + 1, true)}>Show more homes</button>}

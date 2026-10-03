@@ -12,6 +12,8 @@ from rest_framework.views import APIView
 from apps.accounts.models import TenantProfile, User
 from apps.accounts.serializers import normalize_phone
 from apps.core.models import AuditLog
+from apps.properties.models import Property
+from apps.properties.views import _invalidate_public_listing_cache
 from apps.referrals.models import ReferralFee
 from .models import Payment, ViewingCreditPurchase
 from .services import BUNDLES, MpesaError, initiate_stk_push, viewing_credit_balance
@@ -139,6 +141,62 @@ class ViewingCreditWalletView(APIView):
         return Response({"payment_id": payment.id, "status": payment.status, "message": result.get("CustomerMessage", "Check your phone to complete payment.")}, status=202)
 
 
+VERIFICATION_FEE = 2000
+
+
+class PropertyVerificationPaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, property_id):
+        prop = get_object_or_404(Property.objects.select_for_update().select_related("landlord__user"), pk=property_id)
+        if request.user.role != User.Role.ADMIN and prop.landlord.user_id != request.user.id:
+            return Response({"error": {"code": "not_found", "message": "Property not found."}}, status=404)
+        verification = Property.VerificationStatus
+        if prop.verification_status == verification.VERIFIED:
+            return Response({"error": {"code": "already_verified", "message": "This property is already verified."}}, status=409)
+        if prop.verification_status == verification.PENDING:
+            return Response({"error": {"code": "review_pending", "message": "Payment received. This property is awaiting review."}}, status=409)
+        if Payment.objects.filter(property=prop, purpose=Payment.Purpose.VERIFICATION_FEE, status=Payment.Status.PENDING).exists():
+            return Response({"error": {"code": "payment_pending", "message": "Approve or wait for your current M-Pesa prompt before starting another."}}, status=409)
+        if prop.verification_status == verification.REJECTED and Payment.objects.filter(
+            property=prop, purpose=Payment.Purpose.VERIFICATION_FEE, status=Payment.Status.SUCCESSFUL
+        ).exists():
+            prop.verification_status = verification.PENDING
+            prop.save(update_fields=("verification_status", "updated_at"))
+            transaction.on_commit(_invalidate_public_listing_cache)
+            return Response({"status": "pending", "message": "Resubmitted for review. You were not charged again."})
+
+        serializer = PaymentStartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        phone = normalize_phone(serializer.validated_data["phone_number"])
+        key = serializer.validated_data.get("idempotency_key") or request.headers.get("Idempotency-Key") or uuid4().hex
+        payment, created = Payment.objects.get_or_create(
+            idempotency_key=key,
+            defaults={
+                "fee": None, "property": prop, "purpose": Payment.Purpose.VERIFICATION_FEE,
+                "amount": VERIFICATION_FEE, "phone_number": phone,
+                "provider_reference": f"pending:{uuid4().hex}",
+            },
+        )
+        if payment.property_id != prop.id or payment.purpose != Payment.Purpose.VERIFICATION_FEE:
+            return Response({"error": {"code": "idempotency_conflict", "message": "That payment key was used for something else."}}, status=409)
+        if not created:
+            return Response({"payment_id": payment.id, "status": payment.status, "message": "This payment already exists."}, status=202)
+        try:
+            result = initiate_stk_push(amount=payment.amount, phone=re.sub(r"\D", "", phone), reference=f"vf{payment.id}")
+        except MpesaError as exc:
+            payment.status = Payment.Status.FAILED
+            payment.provider_payload = {"error": str(exc)}
+            payment.save(update_fields=("status", "provider_payload", "updated_at"))
+            return Response({"error": {"code": "payment_provider_error", "message": str(exc)}}, status=503)
+        payment.provider_reference = result["CheckoutRequestID"]
+        payment.provider_payload = {"merchant_request_id": result.get("MerchantRequestID"), "customer_message": result.get("CustomerMessage", "")}
+        payment.save(update_fields=("provider_reference", "provider_payload", "updated_at"))
+        AuditLog.objects.create(actor=request.user, action="property_verification.payment_initiated", object_type=payment._meta.label, object_id=str(payment.pk))
+        return Response({"payment_id": payment.id, "status": payment.status, "message": result.get("CustomerMessage", "Check your phone to complete payment.")}, status=202)
+
+
 class MpesaCallbackView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -178,6 +236,12 @@ class MpesaCallbackView(APIView):
                         payment=payment,
                         defaults={"tenant": tenant, "credits_total": payment.credits, "credits_remaining": payment.credits},
                     )
+                elif payment.purpose == Payment.Purpose.VERIFICATION_FEE and payment.property_id:
+                    prop = payment.property
+                    if prop.verification_status in (Property.VerificationStatus.UNVERIFIED, Property.VerificationStatus.REJECTED):
+                        prop.verification_status = Property.VerificationStatus.PENDING
+                        prop.save(update_fields=("verification_status", "updated_at"))
+                        transaction.on_commit(_invalidate_public_listing_cache)
                 else:
                     payment.status = Payment.Status.DISPUTED
                 safe_result["receipt"] = receipt

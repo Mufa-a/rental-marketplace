@@ -227,7 +227,7 @@ class AdminOverviewView(APIView):
             "attribution__landlord__user", "attribution__viewing__request__unit"
         ).order_by("-created_at")[:12]
         latest_payments = Payment.objects.select_related(
-            "fee__attribution__landlord__user", "tenant_user"
+            "fee__attribution__landlord__user", "tenant_user", "property__landlord__user"
         ).order_by("-created_at")[:12]
         latest_viewings = Viewing.objects.select_related(
             "request__unit__property", "request__tenant__user"
@@ -303,7 +303,12 @@ class AdminOverviewView(APIView):
             "payments": [{
                 "id": payment.pk, "purpose": payment.purpose, "amount": payment.amount,
                 "status": payment.status, "phone_number": mask_phone(payment.phone_number),
-                "payer": mask_phone(payment.fee.attribution.landlord.user.phone_number if payment.fee_id else payment.tenant_user.phone_number),
+                "payer": mask_phone(
+                    payment.fee.attribution.landlord.user.phone_number if payment.fee_id
+                    else payment.tenant_user.phone_number if payment.tenant_user_id
+                    else payment.property.landlord.user.phone_number if payment.property_id
+                    else payment.phone_number
+                ),
                 "created_at": payment.created_at,
             } for payment in latest_payments],
         })

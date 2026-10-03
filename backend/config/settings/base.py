@@ -8,6 +8,14 @@ from pathlib import Path
 
 import environ
 
+if os.name == "nt":
+    OSGEO4W = r"C:\OSGeo4W"
+    os.environ["OSGEO4W_ROOT"] = OSGEO4W
+    os.environ["GDAL_DATA"] = OSGEO4W + r"\share\gdal"
+    os.environ["PROJ_LIB"] = OSGEO4W + r"\share\proj"
+    os.environ["PATH"] = OSGEO4W + r"\bin;" + os.environ["PATH"]
+    GDAL_LIBRARY_PATH = OSGEO4W + r"\bin\gdal313.dll"
+    GEOS_LIBRARY_PATH = OSGEO4W + r"\bin\geos_c.dll"
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env(DEBUG=(bool, False))
