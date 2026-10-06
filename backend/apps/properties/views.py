@@ -312,6 +312,8 @@ class UnitDetailView(APIView):
         unit = _owned_unit(request, unit_id)
         serializer = UnitSerializer(unit, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        if unit.moderation_hold and request.user.role != User.Role.ADMIN and serializer.validated_data.get("is_published"):
+            return Response({"error": {"code": "under_review", "message": "This listing is under review and cannot be republished yet. Please contact support."}}, status=status.HTTP_403_FORBIDDEN)
         unit = serializer.save()
         _audit(request, "unit.updated", unit)
         _invalidate_public_listing_cache()

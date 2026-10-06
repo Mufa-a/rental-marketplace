@@ -86,6 +86,9 @@ class Unit(models.Model):
     availability_confirmed_at = models.DateTimeField(null=True, blank=True)
     available_from = models.DateField(null=True, blank=True)
     is_published = models.BooleanField(default=False)
+    # Set by trust & safety (auto-hide on reports, landlord suspension). While set, the
+    # landlord cannot re-publish the unit; only an administrator can clear it.
+    moderation_hold = models.BooleanField(default=False)
     amenities = models.ManyToManyField(Amenity, blank=True, related_name="units")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

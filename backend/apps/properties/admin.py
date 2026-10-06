@@ -24,8 +24,8 @@ class PropertyMediaInline(admin.TabularInline):
 
 @admin.register(Unit)
 class UnitAdmin(admin.ModelAdmin):
-    list_display = ("title", "property", "monthly_rent", "bedrooms", "available", "availability_confirmed_at", "is_published")
-    list_filter = ("unit_type", "available", "is_published", "furnishing")
+    list_display = ("title", "property", "monthly_rent", "bedrooms", "available", "availability_confirmed_at", "is_published", "moderation_hold")
+    list_filter = ("unit_type", "available", "is_published", "moderation_hold", "furnishing")
     search_fields = ("title", "unit_number", "property__name", "property__area")
     prepopulated_fields = {"slug": ("title",)}
     filter_horizontal = ("amenities",)

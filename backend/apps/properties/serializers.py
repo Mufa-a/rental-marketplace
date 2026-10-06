@@ -75,8 +75,8 @@ class UnitSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Unit
-        fields = ("id", "property_id", "unit_number", "slug", "title", "description", "unit_type", "monthly_rent", "security_deposit", "bedrooms", "bathrooms", "floor_area_sqm", "furnishing", "available", "available_from", "is_published", "amenities", "amenity_details", "media", "distance_km", "created_at", "updated_at")
-        read_only_fields = ("id", "property_id", "slug", "media", "created_at", "updated_at")
+        fields = ("id", "property_id", "unit_number", "slug", "title", "description", "unit_type", "monthly_rent", "security_deposit", "bedrooms", "bathrooms", "floor_area_sqm", "furnishing", "available", "available_from", "is_published", "moderation_hold", "amenities", "amenity_details", "media", "distance_km", "created_at", "updated_at")
+        read_only_fields = ("id", "property_id", "slug", "moderation_hold", "media", "created_at", "updated_at")
 
     def get_distance_km(self, obj):
         distance = getattr(obj, "distance", None)

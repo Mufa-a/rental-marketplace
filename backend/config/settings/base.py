@@ -181,3 +181,7 @@ LEGAL_POLICY_VERSION = env("LEGAL_POLICY_VERSION", default="draft-1")
 # ---- Admin URL ----
 # Django admin path; override in production to something non-default.
 ADMIN_URL = env("ADMIN_URL", default="admin/")
+
+# Trust & safety: how many different people must report a listing (for a serious reason)
+# before it is taken offline for admin review.
+REPORT_AUTO_HIDE_THRESHOLD = env.int("REPORT_AUTO_HIDE_THRESHOLD", default=3)
