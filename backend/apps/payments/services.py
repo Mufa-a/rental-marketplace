@@ -90,7 +90,7 @@ def initiate_stk_push(*, amount, phone, reference):
             "Timestamp": timestamp, "TransactionType": "CustomerPayBillOnline",
             "Amount": int(amount), "PartyA": phone, "PartyB": settings.MPESA_SHORTCODE,
             "PhoneNumber": phone, "CallBackURL": callback_url,
-            "AccountReference": reference[:12], "TransactionDesc": "Rental referral fee",
+            "AccountReference": reference[:12], "TransactionDesc": "Rental fee",
         },
     )
     if response.get("ResponseCode") != "0" or not response.get("CheckoutRequestID"):

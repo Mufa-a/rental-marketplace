@@ -1,6 +1,31 @@
 from django.contrib import admin
+from django.contrib import messages
+from django.db import transaction
+from django.utils import timezone
 
 from .models import Amenity, Property, PropertyMedia, Unit
+
+
+@admin.action(description="Mark selected properties as verified")
+def mark_verified(modeladmin, request, queryset):
+    eligible = queryset.filter(
+        verification_payments__purpose="verification_fee",
+        verification_payments__status="successful",
+    )
+    updated = eligible.update(verification_status=Property.VerificationStatus.VERIFIED, updated_at=timezone.now())
+    from .views import _invalidate_public_listing_cache
+    transaction.on_commit(_invalidate_public_listing_cache)
+    modeladmin.message_user(request, f"{updated} paid property(ies) marked verified.", messages.SUCCESS)
+
+
+@admin.action(description="Reject verification for selected properties")
+def mark_rejected(modeladmin, request, queryset):
+    updated = queryset.filter(verification_status=Property.VerificationStatus.PENDING).update(
+        verification_status=Property.VerificationStatus.REJECTED, updated_at=timezone.now()
+    )
+    from .views import _invalidate_public_listing_cache
+    transaction.on_commit(_invalidate_public_listing_cache)
+    modeladmin.message_user(request, f"{updated} property(ies) rejected.", messages.WARNING)
 
 
 class UnitInline(admin.TabularInline):
@@ -15,6 +40,7 @@ class PropertyAdmin(admin.ModelAdmin):
     list_filter = ("city", "county", "verification_status", "is_active")
     search_fields = ("name", "address_line", "area", "city", "landlord__user__phone_number")
     inlines = (UnitInline,)
+    actions = (mark_verified, mark_rejected)
 
 
 class PropertyMediaInline(admin.TabularInline):
