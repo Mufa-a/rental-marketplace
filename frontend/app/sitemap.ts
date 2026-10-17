@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { listingPath } from "@/lib/listingPath";
 
 type Listing = { slug?: string; property?: { city?: string; area?: string } };
 type SearchPage = { next?: string | null; results?: Listing[] };
@@ -19,9 +20,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       const body = (await response.json()) as SearchPage;
       for (const listing of body.results ?? []) {
         if (!listing.slug || !listing.property?.city || !listing.property?.area) continue;
-        const path = ["listings", listing.property.city, listing.property.area, listing.slug]
-          .map((part) => encodeURIComponent(part.toLowerCase().replaceAll(" ", "-"))).join("/");
-        entries.push({ url: `${site}/${path}`, changeFrequency: "weekly", priority: 0.7 });
+        entries.push({ url: `${site}${listingPath(listing.property.city, listing.property.area, listing.slug)}`, changeFrequency: "weekly", priority: 0.7 });
       }
       next = body.next ?? null;
       pages += 1;

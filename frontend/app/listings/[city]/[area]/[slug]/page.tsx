@@ -7,6 +7,7 @@ import SiteHeader from "@/components/SiteHeader";
 import ReportListingButton from "@/components/ReportListingButton";
 import SafetyTips from "@/components/SafetyTips";
 import VerificationBadge from "@/components/VerificationBadge";
+import { listingPath } from "@/lib/listingPath";
 
 type Listing = { id: number; title: string; monthly_rent: number; bedrooms: number; bathrooms: string; furnishing: string; description: string; available: boolean; property: { name: string; area: string; city: string; county: string; country: string; verification_status?: string }; media: { url: string; alt_text: string }[]; amenity_details: { name: string }[] };
 const FURNISHING_LABELS: Record<string, string> = { furnished: "Furnished", unfurnished: "Unfurnished", semi_furnished: "Semi-furnished" };
@@ -22,7 +23,7 @@ export async function generateMetadata({ params }: { params: { slug: string } })
   if (!listing) return {};
   const title = `${listing.title} in ${listing.property.area}, ${listing.property.city}`;
   const description = `${listing.bedrooms === 0 ? "Bedsitter or studio" : `${listing.bedrooms} bedroom home`} to rent in ${listing.property.area}, ${listing.property.city} for KSh ${listing.monthly_rent.toLocaleString()} per month.`;
-  const path = `/listings/${encodeURIComponent(listing.property.city.toLowerCase())}/${encodeURIComponent(listing.property.area.toLowerCase())}/${encodeURIComponent(params.slug)}`;
+  const path = listingPath(listing.property.city, listing.property.area, params.slug);
   const image = listing.media[0]?.url;
   return { title, description, alternates: { canonical: path }, openGraph: { title, description, url: path, type: "website", ...(image ? { images: [{ url: image }] } : {}) }, twitter: { card: image ? "summary_large_image" : "summary", title, description } };
 }

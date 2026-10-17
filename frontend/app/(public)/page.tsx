@@ -8,6 +8,7 @@ import SiteHeader from "@/components/SiteHeader";
 import VerificationBadge from "@/components/VerificationBadge";
 import HeroArt from "@/components/HeroArt";
 import SafetyTips from "@/components/SafetyTips";
+import { listingPath } from "@/lib/listingPath";
 
 type Unit = {
   id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string; furnishing: string;
@@ -140,7 +141,7 @@ export default function Home() {
       {error && <div className="notice" role="status">{error}</div>}
       {loading && <div className="listing-grid">{[1,2,3].map(i => <div className="glass skeleton-card" key={i} aria-label="Loading home" />)}</div>}
       {!loading && nearby && mapVisible && <NearbyMap units={units} center={nearby} />}
-      {!loading && units.length > 0 && <div className="listing-grid">{units.map(unit => <Link key={unit.id} href={`/listings/${encodeURIComponent(unit.property.city.toLowerCase())}/${encodeURIComponent(unit.property.area.toLowerCase())}/${unit.slug}`} className="glass listing-card">
+      {!loading && units.length > 0 && <div className="listing-grid">{units.map(unit => <Link key={unit.id} href={listingPath(unit.property.city, unit.property.area, unit.slug)} className="glass listing-card">
         {unit.media[0]?.url ? <img className="listing-image" src={unit.media[0].url} alt={unit.media[0].alt_text || `${unit.title} rental home`} /> : <div className="listing-image image-placeholder" aria-hidden="true"><HomeGlyph /></div>}
         <div className="listing-card-content"><div className="badge-row"><span className="status">Available</span><VerificationBadge status={unit.property.verification_status} /></div><p className="muted location">{unit.property.area}, {unit.property.city}{unit.distance_km !== null && unit.distance_km !== undefined ? ` · ${unit.distance_km} km away` : ""}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong><p className="muted">{unit.bedrooms === 0 ? "Bedsitter" : `${unit.bedrooms} bedroom${unit.bedrooms === 1 ? "" : "s"}`} · {unit.bathrooms} bath · {FURNISHING_LABELS[unit.furnishing] ?? unit.furnishing}</p></div>
       </Link>)}</div>}
