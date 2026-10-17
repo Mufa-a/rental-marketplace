@@ -1,10 +1,14 @@
 from django.urls import include, path
-from apps.core.admin_views import AdminOverviewView, AdminUserListView, AdminViewingRequestListView
+from apps.core.admin_views import (
+    AdminOverviewView, AdminPendingPropertyListView, AdminReportListView, AdminUserListView, AdminViewingRequestListView,
+)
 
 urlpatterns = [
     path("admin/overview/", AdminOverviewView.as_view(), name="admin-overview"),
     path("admin/users/", AdminUserListView.as_view(), name="admin-users"),
     path("admin/viewing-requests/", AdminViewingRequestListView.as_view(), name="admin-viewing-requests"),
+    path("admin/reports/", AdminReportListView.as_view(), name="admin-reports"),
+    path("admin/properties/", AdminPendingPropertyListView.as_view(), name="admin-properties"),
     path("auth/", include("apps.accounts.urls")),
     path("properties/", include("apps.properties.urls")),
     path("viewings/", include("apps.viewings.urls")),

@@ -16,6 +16,15 @@ type ActivityItem = {
   action: string; label: string; object_type: string; object_id: string;
   actor: string; created_at: string;
 };
+type ReportRow = {
+  id: number; reason: string; detail: string; listing: string | null; property: string | null; listing_hidden: boolean;
+  open_reports_on_listing: number; reporter: string; reported_user: string | null; created_at: string;
+};
+type PendingProperty = {
+  id: number; name: string; area: string; city: string; landlord: string; verification_status: string;
+  verification_fee_paid: boolean; created_at: string;
+};
+type Page<T> = { count: number; results: T[] };
 type Overview = {
   metrics: Record<string, number>;
   focus: FocusItem[];
@@ -31,20 +40,25 @@ const money = (value: number) => `KSh ${value.toLocaleString()}`;
 const label = (value: string) => value.replaceAll("_", " ").replace(/^./, (first) => first.toUpperCase());
 const SEVERITY_LABEL: Record<FocusItem["severity"], string> = { high: "High priority", medium: "Medium priority", low: "Low priority" };
 
-const TABS = ["requests", "viewings", "fees", "payments"] as const;
+const TABS = ["reports", "properties", "requests", "viewings", "fees", "payments"] as const;
 type Tab = (typeof TABS)[number];
-const TAB_LABEL: Record<Tab, string> = { requests: "Viewing requests", viewings: "Viewings", fees: "Landlord fees", payments: "Payments" };
+const TAB_LABEL: Record<Tab, string> = { reports: "Open reports", properties: "Pending verification", requests: "Viewing requests", viewings: "Viewings", fees: "Landlord fees", payments: "Payments" };
 const FOCUS_TAB: Record<string, Tab> = {
+  open_reports: "reports",
+  pending_approvals: "properties",
   pending_viewing_requests: "requests",
   awaiting_outcome: "viewings",
   disputed_viewings: "viewings",
+  overdue_fees: "fees",
 };
 
 export default function AdminDashboard() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("requests");
+  const [tab, setTab] = useState<Tab>("reports");
+  const [reports, setReports] = useState<Page<ReportRow>>({ count: 0, results: [] });
+  const [pendingProperties, setPendingProperties] = useState<Page<PendingProperty>>({ count: 0, results: [] });
 
   useEffect(() => {
     if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
@@ -54,6 +68,8 @@ export default function AdminDashboard() {
     apiFetch<Overview>("/admin/overview/", {}, true).then(setOverview)
       .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load admin dashboard."))
       .finally(() => setLoading(false));
+    apiFetch<Page<ReportRow>>("/admin/reports/?state=open", {}, true).then(setReports).catch(() => undefined);
+    apiFetch<Page<PendingProperty>>("/admin/properties/?status=pending", {}, true).then(setPendingProperties).catch(() => undefined);
   }, []);
 
   const metrics = overview?.metrics;
@@ -66,6 +82,7 @@ export default function AdminDashboard() {
     ["Open reports", metrics.open_reports, metrics.open_reports > 0 ? "danger" : "sage"],
     ["Rentals reported", metrics.rentals_reported, "sage"],
     ["Fees due", metrics.fees_due, "gold"],
+    ["Overdue fees", metrics.fees_overdue ?? 0, (metrics.fees_overdue ?? 0) > 0 ? "danger" : "sage"],
     ["Success fees collected", money(metrics.fees_collected_ksh), "sage"],
     ["Bundle revenue", money(metrics.bundle_revenue_ksh), "sage"],
     ["Failed payments", metrics.failed_payments, metrics.failed_payments > 0 ? "danger" : "sage"],
@@ -124,7 +141,7 @@ export default function AdminDashboard() {
                       <p>{item.detail}</p>
                       <a
                         className="focus-action"
-                        href={item.key === "pending_approvals" ? "#areas" : "#records"}
+                        href="#records"
                         onClick={() => { const target = FOCUS_TAB[item.key]; if (target) setTab(target); }}
                       >
                         {item.action_label} →
@@ -191,6 +208,26 @@ export default function AdminDashboard() {
                 ))}
               </div>
 
+              {tab === "reports" && (
+                <div className="admin-table-wrap">
+                  <table className="admin-table"><thead><tr><th>Listing</th><th>Reason</th><th>Reporter</th><th>Open on listing</th><th>Reported</th></tr></thead>
+                    <tbody>{reports.results.map((report) => <tr key={report.id}><td>{report.listing ?? "—"}{report.property ? <span className="muted"> · {report.property}</span> : null}{report.listing_hidden ? <span className="status status-paused"> hidden</span> : null}</td><td>{label(report.reason)}{report.detail ? <span className="muted"> — {report.detail}</span> : null}</td><td>{report.reporter}</td><td>{report.open_reports_on_listing}</td><td>{new Date(report.created_at).toLocaleDateString()}</td></tr>)}</tbody>
+                  </table>
+                  {reports.results.length === 0 && <p className="muted empty">No open reports. The queue is clear.</p>}
+                  {reports.count > reports.results.length && <p className="muted">Showing the oldest {reports.results.length} of {reports.count} open reports.</p>}
+                  <p className="muted">To dismiss, hide a listing or suspend a landlord, use <strong>Reports</strong> in the Django admin; each action is recorded against your account.</p>
+                </div>
+              )}
+              {tab === "properties" && (
+                <div className="admin-table-wrap">
+                  <table className="admin-table"><thead><tr><th>Property</th><th>Area</th><th>Landlord</th><th>Fee paid</th><th>Submitted</th></tr></thead>
+                    <tbody>{pendingProperties.results.map((property) => <tr key={property.id}><td>{property.name}</td><td>{property.area}, {property.city}</td><td>{property.landlord}</td><td>{property.verification_fee_paid ? "Yes" : "No"}</td><td>{new Date(property.created_at).toLocaleDateString()}</td></tr>)}</tbody>
+                  </table>
+                  {pendingProperties.results.length === 0 && <p className="muted empty">No properties are waiting for verification.</p>}
+                  {pendingProperties.count > pendingProperties.results.length && <p className="muted">Showing the oldest {pendingProperties.results.length} of {pendingProperties.count} pending properties.</p>}
+                  <p className="muted">To verify or reject, use <strong>Properties</strong> in the Django admin. Only properties with a successful verification payment can be marked verified.</p>
+                </div>
+              )}
               {tab === "requests" && (
                 <div className="admin-table-wrap">
                   <table className="admin-table"><thead><tr><th>Property and unit</th><th>Tenant</th><th>Landlord</th><th>Monthly rent</th><th>Status</th><th>Requested</th></tr></thead>

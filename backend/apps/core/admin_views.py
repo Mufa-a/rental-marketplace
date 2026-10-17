@@ -401,3 +401,75 @@ class AdminViewingRequestListView(APIView):
                 "scheduled_at": viewing.scheduled_at if viewing else None,
             })
         return paginator.get_paginated_response(rows)
+
+
+class AdminReportListView(APIView):
+    """GET /api/v1/admin/reports/?state=open|resolved|all&page= — the trust & safety queue.
+
+    Read-only: reports are resolved from Django admin, where each action (dismiss, hide, suspend)
+    is recorded against the acting administrator. Reporter identities are masked like every
+    other phone number on the dashboard.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        denied = _require_admin(request)
+        if denied:
+            return denied
+        state = request.query_params.get("state", "open")
+        reports = Report.objects.select_related("reporter", "reported_user", "listing__property", "resolved_by")
+        if state == "open":
+            reports = reports.filter(resolved_at__isnull=True)
+        elif state == "resolved":
+            reports = reports.filter(resolved_at__isnull=False)
+        reports = reports.order_by("created_at", "id") if state == "open" else reports.order_by("-created_at", "-id")
+        paginator = AdminPagination()
+        page = paginator.paginate_queryset(reports, request, view=self)
+        open_counts = {
+            row["listing_id"]: row["count"]
+            for row in Report.objects.filter(resolved_at__isnull=True, listing_id__in=[r.listing_id for r in page if r.listing_id])
+            .values("listing_id").annotate(count=Count("id"))
+        }
+        _audit_admin(request, "admin.reports_listed", state=state)
+        return paginator.get_paginated_response([{
+            "id": report.pk, "reason": report.reason, "detail": report.detail[:500],
+            "listing": report.listing.title if report.listing_id else None,
+            "property": report.listing.property.name if report.listing_id else None,
+            "listing_hidden": bool(report.listing_id and report.listing.moderation_hold),
+            "open_reports_on_listing": open_counts.get(report.listing_id, 0),
+            "reporter": mask_phone(report.reporter.phone_number),
+            "reported_user": mask_phone(report.reported_user.phone_number) if report.reported_user_id else None,
+            "created_at": report.created_at, "resolved_at": report.resolved_at, "resolution": report.resolution,
+        } for report in page])
+
+
+class AdminPendingPropertyListView(APIView):
+    """GET /api/v1/admin/properties/?status=pending|unverified|verified|rejected|all — verification queue."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        denied = _require_admin(request)
+        if denied:
+            return denied
+        status = request.query_params.get("status", Property.VerificationStatus.PENDING)
+        properties = Property.objects.select_related("landlord__user")
+        if status != "all":
+            properties = properties.filter(verification_status=status)
+        properties = properties.order_by("created_at", "id")
+        paginator = AdminPagination()
+        page = paginator.paginate_queryset(properties, request, view=self)
+        paid = set(
+            Payment.objects.filter(
+                purpose=Payment.Purpose.VERIFICATION_FEE, status=Payment.Status.SUCCESSFUL,
+                property_id__in=[p.pk for p in page],
+            ).values_list("property_id", flat=True)
+        )
+        _audit_admin(request, "admin.properties_listed", status=status)
+        return paginator.get_paginated_response([{
+            "id": prop.pk, "name": prop.name, "area": prop.area, "city": prop.city,
+            "landlord": mask_phone(prop.landlord.user.phone_number),
+            "verification_status": prop.verification_status, "verification_fee_paid": prop.pk in paid,
+            "created_at": prop.created_at,
+        } for prop in page])
