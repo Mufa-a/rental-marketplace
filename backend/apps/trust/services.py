@@ -27,6 +27,10 @@ def auto_hide_threshold() -> int:
     return getattr(settings, "REPORT_AUTO_HIDE_THRESHOLD", 3)
 
 
+def min_reporter_age_hours() -> int:
+    return getattr(settings, "REPORT_MIN_ACCOUNT_AGE_HOURS", 24)
+
+
 def _bust_public_cache():
     cache.add("public-listings:version", 1, timeout=None)
     cache.incr("public-listings:version")
@@ -40,7 +44,13 @@ def maybe_auto_hide(unit: Unit) -> bool:
     """Take the unit offline once enough different people have reported it. Returns True if hidden."""
     if not unit.is_published:
         return False
-    open_serious = Report.objects.filter(listing=unit, resolved_at__isnull=True, reason__in=SERIOUS_REASONS).count()
+    # Only established, phone-verified accounts count. Otherwise a handful of throwaway accounts
+    # could take any competitor's listing offline; their reports still reach the admin queue.
+    cutoff = timezone.now() - timedelta(hours=min_reporter_age_hours())
+    open_serious = Report.objects.filter(
+        listing=unit, resolved_at__isnull=True, reason__in=SERIOUS_REASONS,
+        reporter__phone_verified=True, reporter__created_at__lte=cutoff,
+    ).count()
     if open_serious < auto_hide_threshold():
         return False
     unit.is_published = False

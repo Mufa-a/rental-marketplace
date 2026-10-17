@@ -193,3 +193,6 @@ ADMIN_URL = env("ADMIN_URL", default="admin/")
 # Trust & safety: how many different people must report a listing (for a serious reason)
 # before it is taken offline for admin review.
 REPORT_AUTO_HIDE_THRESHOLD = env.int("REPORT_AUTO_HIDE_THRESHOLD", default=3)
+# Reports from accounts younger than this (or without a verified phone) are still queued for an
+# admin, but do not count toward the automatic hide.
+REPORT_MIN_ACCOUNT_AGE_HOURS = env.int("REPORT_MIN_ACCOUNT_AGE_HOURS", default=24)

@@ -5,7 +5,10 @@ from apps.accounts.models import LandlordProfile, User
 from apps.properties.models import Property, Unit
 from apps.trust.models import AccountRestriction, Report
 from apps.trust import services
+from datetime import timedelta
+
 from django.core.cache import cache
+from django.utils import timezone
 
 
 def _unit():
@@ -36,8 +39,11 @@ class TestReports:
         assert client.post("/api/v1/trust/reports/", {"listing_id": unit.id, "reason": "made-up"}, format="json").status_code == 400
 
 
-def _tenant(n):
-    return User.objects.create_user(username=f"t{n}", phone_number=f"+2547000001{n:02d}", role="tenant")
+def _tenant(n, *, verified=True, age_hours=48):
+    """A reporter who has been around long enough for their report to count toward auto-hide."""
+    user = User.objects.create_user(username=f"t{n}", phone_number=f"+2547000001{n:02d}", role="tenant", phone_verified=verified)
+    User.objects.filter(pk=user.pk).update(created_at=timezone.now() - timedelta(hours=age_hours))
+    return user
 
 
 def _report(client_user, unit, reason="fraudulent_listing"):
@@ -142,3 +148,40 @@ class TestModerationActions:
         report = Report.objects.get()
         unit.refresh_from_db()
         assert not unit.is_published and report.resolution == "actioned" and report.resolved_by_id == admin.id
+
+
+@pytest.mark.django_db
+class TestAutoHideIgnoresThrowawayAccounts:
+    def _file(self, unit, reporters):
+        for reporter in reporters:
+            assert _report(reporter, unit).status_code == 201
+
+    def test_new_accounts_cannot_take_a_listing_offline(self, settings):
+        settings.REPORT_AUTO_HIDE_THRESHOLD = 3
+        _, unit = _unit()
+        self._file(unit, [_tenant(n, age_hours=1) for n in (1, 2, 3, 4)])
+        unit.refresh_from_db()
+        assert unit.is_published and not unit.moderation_hold
+        assert Report.objects.count() == 4  # still queued for an administrator
+
+    def test_unverified_accounts_do_not_count(self, settings):
+        settings.REPORT_AUTO_HIDE_THRESHOLD = 2
+        _, unit = _unit()
+        self._file(unit, [_tenant(n, verified=False) for n in (1, 2, 3)])
+        unit.refresh_from_db()
+        assert unit.is_published
+
+    def test_established_reporters_still_trigger_the_hide_alongside_new_ones(self, settings):
+        settings.REPORT_AUTO_HIDE_THRESHOLD = 2
+        _, unit = _unit()
+        self._file(unit, [_tenant(1), _tenant(2, age_hours=1), _tenant(3)])
+        unit.refresh_from_db()
+        assert not unit.is_published and unit.moderation_hold
+
+    def test_the_minimum_age_is_configurable(self, settings):
+        settings.REPORT_AUTO_HIDE_THRESHOLD = 2
+        settings.REPORT_MIN_ACCOUNT_AGE_HOURS = 0
+        _, unit = _unit()
+        self._file(unit, [_tenant(n, age_hours=0) for n in (1, 2)])
+        unit.refresh_from_db()
+        assert not unit.is_published
