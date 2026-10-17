@@ -61,8 +61,11 @@ Frontend checks:
 Set-Location frontend
 npx tsc --noEmit
 npm run lint
+npm test
 npm run build
 ```
+
+`.github/workflows/ci.yml` runs all of the above (plus Docker image builds) on every push to `main` and every pull request. `npm run lint` currently reports a few warnings (plain `<img>` tags, a font link, two effect dependency lists); it fails only on errors.
 
 ## Authentication and local OTP
 
@@ -99,5 +102,27 @@ API validation and permission errors use the documented `{ "error": { "code": ".
 Copy `backend/.env.example` to `backend/.env` for local development. Do not commit real secrets. Production should use `DJANGO_SETTINGS_MODULE=config.settings.prod`, a strong `DJANGO_SECRET_KEY`, explicit `ALLOWED_HOSTS`, PostgreSQL and Redis URLs, Africa’s Talking credentials, and R2 credentials where photo uploads are required.
 
 The Daraja request and callback code is present, but live tenant bundles and landlord success-fee payments need Safaricom credentials, an approved merchant setup, a public HTTPS callback URL, and a strong callback token. Africa's Talking and Cloudflare R2 likewise remain disabled until their real credentials and bucket settings are supplied. Set a restricted `NEXT_PUBLIC_MAPTILER_KEY` for the commercial map tile service before production; the OpenStreetMap fallback is for local preview.
+
+### Running it in containers
+
+`docker-compose.prod.yml` runs PostGIS, Redis, a one-shot `migrate` job, the API (gunicorn), a notifications worker and the Next.js site:
+
+```powershell
+Copy-Item backend\.env.example backend\.env   # real secrets; DEBUG=False; production ALLOWED_HOSTS
+# .env.prod: POSTGRES_ADMIN_PASSWORD, APP_DB_PASSWORD, NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_SITE_URL
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+- **TLS is not included.** Put a reverse proxy in front of ports 8000 (API) and 3000 (site). Production settings redirect plain HTTP to HTTPS and trust `X-Forwarded-Proto` from it.
+- **The `worker` service must stay running.** It runs `run_notifications` every hour (`NOTIFICATION_INTERVAL_SECONDS` to change it). SMS delivery, viewing and overdue-fee reminders, and the seven-day expiry of unanswered viewing requests all depend on it.
+- `NEXT_PUBLIC_*` values are baked into the site at build time, so changing one means rebuilding the `frontend` image. Add any `NEXT_PUBLIC_LEGAL_*` values you need as build args in the frontend Dockerfile and compose file.
+- The API healthcheck sends the first `ALLOWED_HOSTS` entry as its `Host` header, so list your real API hostname first.
+- The images were written without being built in the authoring environment; the first CI run (`docker` job) is the real test of them.
+
+### Trust and safety settings
+
+- `REPORT_AUTO_HIDE_THRESHOLD` (default 3): open reports for a serious reason that take a listing offline for review.
+- `REPORT_MIN_ACCOUNT_AGE_HOURS` (default 24): only reports from phone-verified accounts at least this old count toward that threshold. Other reports still appear in the admin queue.
+- The frontend admin dashboard lists open reports and properties awaiting verification (read-only). Resolve reports and verify or reject properties from Django admin, where each action is recorded against the acting administrator.
 
 See [`docs/payment-tools-and-costs.md`](docs/payment-tools-and-costs.md) for current bundle pricing, provider costs, assumptions, and launch setup items.

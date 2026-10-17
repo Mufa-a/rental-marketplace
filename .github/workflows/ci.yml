@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - run: python manage.py check --settings=config.settings.test
+      - run: python manage.py makemigrations --check --dry-run --settings=config.settings.test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build ./backend
+      - name: Build frontend image
+        run: docker build ./frontend --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com/api/v1 --build-arg NEXT_PUBLIC_SITE_URL=https://example.com
+      - name: Validate production compose file
+        env:
+          POSTGRES_ADMIN_PASSWORD: ci
+          APP_DB_PASSWORD: ci
+          NEXT_PUBLIC_API_BASE_URL: https://api.example.com/api/v1
+          NEXT_PUBLIC_SITE_URL: https://example.com
+        run: |
+          touch backend/.env
+          docker compose -f docker-compose.prod.yml config --quiet

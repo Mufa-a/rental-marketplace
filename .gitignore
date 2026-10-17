@@ -30,3 +30,6 @@ frontend/.env.local
 pytest-cache-files-*/
 .vscode/
 *.tsbuildinfo
+
+# Collected static files
+backend/staticfiles/
