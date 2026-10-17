@@ -5,6 +5,7 @@ from datetime import timedelta
 from apps.notifications.models import Notification
 from apps.notifications.services import deliver_pending, queue_sms
 from apps.core.models import AuditLog
+from apps.referrals.models import ReferralFee
 from apps.viewings.models import Viewing
 from apps.viewings.models import ViewingRequest
 
@@ -52,6 +53,17 @@ class Command(BaseCommand):
             stamp = viewing.scheduled_at.isoformat()
             for user, role in ((viewing.request.tenant.user, "tenant"), (viewing.request.unit.property.landlord.user, "landlord")):
                 queue_sms(recipient=user, event="viewing.outcome_due", dedupe_key=f"viewing:{viewing.pk}:outcome-prompt:{stamp}:{role}", message="How did the viewing go? Sign in and mark it complete to report the outcome.")
+        # One reminder per overdue success fee. The dedupe key keeps the hourly run from texting again.
+        overdue_fees = ReferralFee.objects.filter(
+            status=ReferralFee.Status.PENDING, due_at__lt=now,
+        ).select_related("attribution__landlord__user", "attribution__viewing__request__unit")
+        for fee in overdue_fees:
+            unit = fee.attribution.viewing.request.unit
+            queue_sms(
+                recipient=fee.attribution.landlord.user, event="referral.fee_overdue",
+                dedupe_key=f"referral-fee:{fee.pk}:overdue:landlord",
+                message=f"Your KSh {fee.amount:,} success fee for {unit.title} was due on {timezone.localtime(fee.due_at).strftime('%d %b')}. Sign in to pay it with M-Pesa.",
+            )
         count = deliver_pending()
         pending = Notification.objects.filter(status=Notification.Status.PENDING).count()
         self.stdout.write(self.style.SUCCESS(f"Sent {count} SMS notification(s); {pending} remain pending."))

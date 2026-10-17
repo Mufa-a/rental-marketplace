@@ -143,6 +143,8 @@ class ViewingActionView(APIView):
                 unit.is_published = False
                 unit.availability_confirmed_at = timezone.now()
                 unit.save(update_fields=["available", "is_published", "availability_confirmed_at", "updated_at"])
+                from .services import close_requests_for_rented_unit
+                close_requests_for_rented_unit(viewing.request)
                 queue_sms(recipient=unit.property.landlord.user, event="referral.fee_created", dedupe_key=f"referral-fee:{fee.pk}:landlord", message=f"You reported that {unit.title} was rented. A KSh {fee.amount:,} success fee is due by {timezone.localtime(fee.due_at).strftime('%d %b')}. Approve the M-Pesa prompt sent to your registered number.")
                 from apps.payments.models import Payment
                 from apps.payments.views import initiate_referral_fee_push

@@ -31,6 +31,8 @@ ACTIVITY_LABELS = {
     "viewing_request.created": "Viewing requested",
     "viewing_request.cancelled": "Viewing request cancelled",
     "viewing_request.rejected": "Viewing request declined",
+    "viewing_request.closed_unit_rented": "Viewing request closed (home rented)",
+    "viewing_request.expired": "Viewing request expired",
     "viewing.scheduled": "Viewing scheduled",
     "viewing.completed": "Viewing completed",
     "viewing.outcome_reported": "Viewing outcome reported",
@@ -122,6 +124,20 @@ def _focus_items():
             "detail": "Tenant or landlord has not yet reported what happened.",
             "severity": "medium",
             "action_label": "View viewings",
+        })
+
+    overdue_fees = ReferralFee.objects.filter(status=ReferralFee.Status.PENDING, due_at__lt=now).order_by("due_at")
+    overdue_count = overdue_fees.count()
+    if overdue_count:
+        oldest = overdue_fees.first()
+        days_overdue = (now - oldest.due_at).days
+        items.append({
+            "key": "overdue_fees",
+            "label": "Overdue landlord success fees",
+            "count": overdue_count,
+            "detail": f"Oldest was due {days_overdue} day{'s' if days_overdue != 1 else ''} ago.",
+            "severity": "high" if days_overdue >= 7 else "medium",
+            "action_label": "View fees",
         })
 
     unpublished_units = Unit.objects.filter(is_published=False).count()
@@ -249,6 +265,7 @@ class AdminOverviewView(APIView):
                 "rentals_reported": Viewing.objects.filter(status=Viewing.Status.RENTED).count(),
                 "open_reports": Report.objects.filter(resolved_at__isnull=True).count(),
                 "fees_due": ReferralFee.objects.filter(status=ReferralFee.Status.PENDING).count(),
+                "fees_overdue": ReferralFee.objects.filter(status=ReferralFee.Status.PENDING, due_at__lt=timezone.now()).count(),
                 "fees_collected_ksh": Payment.objects.filter(
                     purpose=Payment.Purpose.REFERRAL_FEE, status=Payment.Status.SUCCESSFUL
                 ).aggregate(total=Sum("amount"))["total"] or 0,
