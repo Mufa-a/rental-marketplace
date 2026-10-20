@@ -134,6 +134,7 @@ class PropertyMedia(models.Model):
         KITCHEN = "kitchen", "Kitchen"
         BATHROOM = "bathroom", "Bathroom"
         OTHER = "other", "Other"
+        VIDEO = "video", "Video"
 
     unit = models.ForeignKey(Unit, on_delete=models.CASCADE, related_name="media")
     asset_key = models.CharField(max_length=500, unique=True)
@@ -144,6 +145,14 @@ class PropertyMedia(models.Model):
 
     class Meta:
         ordering = ("sort_order", "created_at")
+        constraints = [
+            # A home has any number of photos but at most one video.
+            models.UniqueConstraint(fields=("unit",), condition=models.Q(media_type="video"), name="one_video_per_unit"),
+        ]
+
+    @property
+    def is_video(self):
+        return self.media_type == self.MediaType.VIDEO
 
     def __str__(self):
         return f"{self.unit} ({self.media_type})"

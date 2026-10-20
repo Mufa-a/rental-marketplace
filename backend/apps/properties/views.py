@@ -5,10 +5,9 @@ import os
 from uuid import uuid4
 from datetime import timedelta
 
-import boto3
 from django.conf import settings
 from django.core.cache import cache
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import ProtectedError
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -22,10 +21,10 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.models import LandlordProfile, User
-from botocore.config import Config
 from apps.core.models import AuditLog
 
 from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit
+from .media import ALLOWED_TYPES, delete_object, is_video_type, max_bytes_for, r2_client, r2_configured
 from .permissions import IsLandlordOrAdmin, can_manage
 from .serializers import AmenitySerializer, PresignUploadSerializer, PropertyMediaSerializer, PropertySerializer, SavedUnitSerializer, UnitSerializer
 
@@ -388,6 +387,7 @@ class UnitAvailabilityView(APIView):
 
 
 class MediaListCreateView(APIView):
+    """List a unit's photos and video, and register a file the browser has already uploaded to R2."""
     permission_classes = [IsLandlordOrAdmin]
 
     def get(self, request, unit_id):
@@ -401,17 +401,48 @@ class MediaListCreateView(APIView):
         asset_key = serializer.validated_data["asset_key"]
         if not asset_key.startswith(f"properties/{unit.id}/"):
             raise ValidationError({"asset_key": "This upload key does not belong to the unit."})
-        if not all((settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL)):
+        if not r2_configured():
             raise ValidationError("R2 storage is not configured.")
-        client = boto3.client("s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL, aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY)
         try:
-            uploaded_object = client.head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key)
+            uploaded_object = r2_client().head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key)
         except Exception:
-            raise ValidationError({"asset_key": "The uploaded photo could not be verified. Upload it again."})
-        if uploaded_object.get("ContentLength", 10 * 1024 * 1024 + 1) > 10 * 1024 * 1024 or uploaded_object.get("ContentType") not in ("image/jpeg", "image/png", "image/webp"):
-            raise ValidationError({"asset_key": "The uploaded object is not an accepted image under 10 MB."})
-        media = serializer.save(unit=unit)
-        _audit(request, "property_media.created", media)
+            raise ValidationError({"asset_key": "The uploaded file could not be verified. Upload it again."})
+
+        # The presigned PUT cannot cap size or type, so the stored object is checked here and a file
+        # that fails is removed rather than left in the bucket.
+        content_type = uploaded_object.get("ContentType")
+        if content_type not in ALLOWED_TYPES:
+            delete_object(asset_key)
+            raise ValidationError({"asset_key": "Only JPEG, PNG or WebP photos and MP4, WebM or MOV videos are accepted."})
+        limit = max_bytes_for(content_type)
+        if uploaded_object.get("ContentLength", limit + 1) > limit:
+            delete_object(asset_key)
+            kind = "video" if is_video_type(content_type) else "photo"
+            raise ValidationError({"asset_key": f"That {kind} is larger than the {limit // (1024 * 1024)} MB limit."})
+
+        replaced_key = None
+        with transaction.atomic():
+            # Lock the unit row so two simultaneous uploads cannot both slip past the photo limit.
+            Unit.objects.select_for_update().get(pk=unit.pk)
+            if is_video_type(content_type):
+                media_type = PropertyMedia.MediaType.VIDEO
+                previous = unit.media.filter(media_type=PropertyMedia.MediaType.VIDEO).first()
+                if previous:  # one video per home: the new one replaces the old
+                    replaced_key = previous.asset_key
+                    _audit(request, "property_media.deleted", previous)
+                    previous.delete()
+            else:
+                media_type = serializer.validated_data.get("media_type", PropertyMedia.MediaType.OTHER)
+                if media_type == PropertyMedia.MediaType.VIDEO:
+                    media_type = PropertyMedia.MediaType.OTHER  # a photo cannot claim to be the video
+                photo_count = unit.media.exclude(media_type=PropertyMedia.MediaType.VIDEO).count()
+                if photo_count >= settings.MEDIA_MAX_PHOTOS_PER_UNIT:
+                    delete_object(asset_key)
+                    raise ValidationError({"asset_key": f"A home can have at most {settings.MEDIA_MAX_PHOTOS_PER_UNIT} photos. Remove one to add another."})
+            media = serializer.save(unit=unit, media_type=media_type)
+            _audit(request, "property_media.created", media)
+        if replaced_key:
+            delete_object(replaced_key)
         _invalidate_public_listing_cache()
         return Response(PropertyMediaSerializer(media).data, status=status.HTTP_201_CREATED)
 
@@ -423,37 +454,39 @@ class MediaDetailView(APIView):
         media = get_object_or_404(PropertyMedia.objects.select_related("unit__property__landlord__user"), pk=media_id)
         if not can_manage(request.user, media.unit.property):
             raise PermissionDenied("You cannot manage this media item.")
+        asset_key = media.asset_key
         _audit(request, "property_media.deleted", media)
         media.delete()
+        delete_object(asset_key)
         _invalidate_public_listing_cache()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MediaPresignView(APIView):
-    """Return a short-lived R2 presigned PUT; the image never passes through Django."""
+    """Return a short-lived R2 presigned PUT; the file never passes through Django."""
     permission_classes = [IsLandlordOrAdmin]
 
     def post(self, request, unit_id):
         unit = _owned_unit(request, unit_id)
         serializer = PresignUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if not all((settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL)):
+        if not r2_configured():
             raise ValidationError("R2 storage is not configured.")
+        content_type = serializer.validated_data["content_type"]
+        if not is_video_type(content_type):
+            photo_count = unit.media.exclude(media_type=PropertyMedia.MediaType.VIDEO).count()
+            if photo_count >= settings.MEDIA_MAX_PHOTOS_PER_UNIT:
+                raise ValidationError({"detail": f"A home can have at most {settings.MEDIA_MAX_PHOTOS_PER_UNIT} photos. Remove one to add another."})
         extension = os.path.splitext(serializer.validated_data["filename"])[1].lower()
         asset_key = f"properties/{unit.id}/{uuid4().hex}{extension}"
-        client = boto3.client(
-            "s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL,
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name="auto", config=Config(signature_version="s3v4"),
-        )
-        content_type = serializer.validated_data["content_type"]
-        upload_url = client.generate_presigned_url(
+        upload_url = r2_client().generate_presigned_url(
             "put_object",
             Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": asset_key, "ContentType": content_type},
-            ExpiresIn=300,
+            # Videos take longer to send than photos on a mobile connection.
+            ExpiresIn=900 if is_video_type(content_type) else 300,
         )
         return Response({
             "asset_key": asset_key,
             "upload": {"url": upload_url, "method": "PUT", "headers": {"Content-Type": content_type}},
-            "expires_in_seconds": 300,
+            "expires_in_seconds": 900 if is_video_type(content_type) else 300,
         })

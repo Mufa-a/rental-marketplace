@@ -188,3 +188,9 @@ REPORT_AUTO_HIDE_THRESHOLD = env.int("REPORT_AUTO_HIDE_THRESHOLD", default=3)
 # Reports from accounts younger than this (or without a verified phone) are still queued for an
 # admin, but do not count toward the automatic hide.
 REPORT_MIN_ACCOUNT_AGE_HOURS = env.int("REPORT_MIN_ACCOUNT_AGE_HOURS", default=24)
+
+# ---- Listing media limits ----
+# Photos are re-encoded in the browser (EXIF/GPS removed) and capped at 10 MB; one video per home.
+MEDIA_MAX_PHOTOS_PER_UNIT = env.int("MEDIA_MAX_PHOTOS_PER_UNIT", default=20)
+MEDIA_MAX_IMAGE_BYTES = env.int("MEDIA_MAX_IMAGE_BYTES", default=10 * 1024 * 1024)
+MEDIA_MAX_VIDEO_BYTES = env.int("MEDIA_MAX_VIDEO_BYTES", default=100 * 1024 * 1024)

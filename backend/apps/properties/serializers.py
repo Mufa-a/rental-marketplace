@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit
 from .fields import GeographicPoint
+from .media import ALLOWED_TYPES, is_video_type, max_bytes_for
 
 
 class AmenitySerializer(serializers.ModelSerializer):
@@ -55,28 +56,43 @@ class PropertySerializer(serializers.ModelSerializer):
 
 class PropertyMediaSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
+    kind = serializers.SerializerMethodField()
 
     class Meta:
         model = PropertyMedia
-        fields = ("id", "asset_key", "url", "media_type", "alt_text", "sort_order", "created_at")
-        read_only_fields = ("id", "url", "created_at")
+        fields = ("id", "asset_key", "url", "kind", "media_type", "alt_text", "sort_order", "created_at")
+        read_only_fields = ("id", "url", "kind", "created_at")
 
     def get_url(self, obj):
         return f"{settings.R2_PUBLIC_BASE_URL}/{obj.asset_key}" if settings.R2_PUBLIC_BASE_URL else ""
+
+    def get_kind(self, obj):
+        return "video" if obj.is_video else "image"
 
 
 class UnitSerializer(serializers.ModelSerializer):
     property_id = serializers.IntegerField(source="property.id", read_only=True)
     amenities = serializers.PrimaryKeyRelatedField(queryset=Amenity.objects.all(), many=True, required=False)
     amenity_details = AmenitySerializer(source="amenities", many=True, read_only=True)
-    media = PropertyMediaSerializer(many=True, read_only=True)
+    # `media` is photos only and `video` is the home's single video, so a video can never end up
+    # where the site expects an image (cards, thumbnails, the gallery). Filtering in Python keeps
+    # the prefetch the list views already do.
+    media = serializers.SerializerMethodField()
+    video = serializers.SerializerMethodField()
     available = serializers.BooleanField(read_only=True)
     distance_km = serializers.SerializerMethodField()
 
     class Meta:
         model = Unit
-        fields = ("id", "property_id", "unit_number", "slug", "title", "description", "unit_type", "monthly_rent", "security_deposit", "bedrooms", "bathrooms", "floor_area_sqm", "furnishing", "available", "available_from", "is_published", "moderation_hold", "amenities", "amenity_details", "media", "distance_km", "created_at", "updated_at")
+        fields = ("id", "property_id", "unit_number", "slug", "title", "description", "unit_type", "monthly_rent", "security_deposit", "bedrooms", "bathrooms", "floor_area_sqm", "furnishing", "available", "available_from", "is_published", "moderation_hold", "amenities", "amenity_details", "media", "video", "distance_km", "created_at", "updated_at")
         read_only_fields = ("id", "property_id", "slug", "moderation_hold", "media", "created_at", "updated_at")
+
+    def get_media(self, obj):
+        return PropertyMediaSerializer([item for item in obj.media.all() if not item.is_video], many=True).data
+
+    def get_video(self, obj):
+        video = next((item for item in obj.media.all() if item.is_video), None)
+        return PropertyMediaSerializer(video).data if video else None
 
     def get_distance_km(self, obj):
         distance = getattr(obj, "distance", None)
@@ -104,20 +120,22 @@ class SavedUnitSerializer(serializers.ModelSerializer):
 
 class PresignUploadSerializer(serializers.Serializer):
     filename = serializers.CharField(max_length=200)
-    content_type = serializers.ChoiceField(choices=("image/jpeg", "image/png", "image/webp"))
+    content_type = serializers.ChoiceField(choices=tuple(ALLOWED_TYPES))
+    # Optional: lets an oversize file be refused before it is uploaded at all.
+    size = serializers.IntegerField(min_value=1, required=False)
 
     def validate_filename(self, value):
         if "/" in value or "\\" in value or "." not in value:
-            raise serializers.ValidationError("Provide an image filename, not a path.")
+            raise serializers.ValidationError("Provide a photo or video filename, not a path.")
         return value
 
     def validate(self, attrs):
-        allowed_extensions = {
-            "image/jpeg": {".jpg", ".jpeg"},
-            "image/png": {".png"},
-            "image/webp": {".webp"},
-        }
         extension = os.path.splitext(attrs["filename"])[1].lower()
-        if extension not in allowed_extensions[attrs["content_type"]]:
-            raise serializers.ValidationError({"filename": "The filename extension must match the image type."})
+        if extension not in ALLOWED_TYPES[attrs["content_type"]]:
+            raise serializers.ValidationError({"filename": "The filename extension must match the file type."})
+        size = attrs.get("size")
+        limit = max_bytes_for(attrs["content_type"])
+        if size is not None and size > limit:
+            kind = "video" if is_video_type(attrs["content_type"]) else "photo"
+            raise serializers.ValidationError({"size": f"That {kind} is larger than the {limit // (1024 * 1024)} MB limit."})
         return attrs
