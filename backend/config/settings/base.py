@@ -120,6 +120,10 @@ REST_FRAMEWORK = {
         "public_search": "120/min",
         "report": "10/hour",
         "deletion_request": "5/day",
+        "otp_verify": "10/15min",
+        "otp_request_ip": "60/1h",
+        "payment_start": "20/hour",
+        "verification_upload": "30/day",
     },
     # Set to the number of reverse proxies in front of Django (e.g. 1 behind
     # Caddy/nginx) so throttling keys on the real client IP. 0 = trust only
@@ -166,6 +170,13 @@ AWS_STORAGE_BUCKET_NAME = env("R2_BUCKET_NAME", default="")
 AWS_S3_ENDPOINT_URL = env("R2_ENDPOINT_URL", default="")
 AWS_S3_ADDRESSING_STYLE = "virtual"
 R2_PUBLIC_BASE_URL = env("R2_PUBLIC_BASE_URL", default="").rstrip("/")
+# Landlord verification documents: a separate PRIVATE bucket (no public URL, short presigned reads).
+# When unset (development), documents go to PRIVATE_MEDIA_ROOT, which is never served over HTTP.
+R2_PRIVATE_BUCKET_NAME = env("R2_PRIVATE_BUCKET_NAME", default="")
+PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=str(BASE_DIR / "private_media"))
+VERIFICATION_DOCUMENT_RETENTION_DAYS = env.int("VERIFICATION_DOCUMENT_RETENTION_DAYS", default=90)
+# Upload limits (bytes). Keep the reverse proxy's client_max_body_size above 4 x this.
+VERIFICATION_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024
 
 # ---- Third-party service credentials (used from Phase 2/5/6 onward) ----
 AFRICASTALKING_USERNAME = env("AFRICASTALKING_USERNAME", default="")
@@ -177,8 +188,53 @@ MPESA_PASSKEY = env("MPESA_PASSKEY", default="")
 MPESA_ENV = env("MPESA_ENV", default="sandbox")
 MPESA_CALLBACK_URL = env("MPESA_CALLBACK_URL", default="")
 MPESA_CALLBACK_TOKEN = env("MPESA_CALLBACK_TOKEN", default="")
+# CustomerPayBillOnline (paybill) or CustomerBuyGoodsOnline (till). For a till, set
+# MPESA_PARTY_B to the till number; MPESA_SHORTCODE stays the store/head-office number.
+MPESA_TRANSACTION_TYPE = env("MPESA_TRANSACTION_TYPE", default="CustomerPayBillOnline")
+MPESA_PARTY_B = env("MPESA_PARTY_B", default="")
+# Cross-check every success callback with an STK Push Query before granting value.
+MPESA_CONFIRM_CALLBACKS = env.bool("MPESA_CONFIRM_CALLBACKS", default=True)
+# Optional extra check: only accept callbacks from these addresses/CIDRs (Safaricom publishes its ranges).
+MPESA_CALLBACK_ALLOWED_IPS = env.list("MPESA_CALLBACK_ALLOWED_IPS", default=[])
+
+# ---- Payments ----
+# "mpesa" in every real environment. "simulator" only for local development (refused in prod).
+PAYMENT_PROVIDER = env("PAYMENT_PROVIDER", default="mpesa")
+# A pending payment older than this is checked with the provider before it blocks a new attempt.
+PAYMENT_QUERY_AFTER_SECONDS = env.int("PAYMENT_QUERY_AFTER_SECONDS", default=90)
+# A pending payment with no final provider answer after this long is marked failed (timeout).
+PAYMENT_TIMEOUT_MINUTES = env.int("PAYMENT_TIMEOUT_MINUTES", default=10)
+# Country whose price list applies when a request does not say otherwise (ISO 3166-1 alpha-2).
+DEFAULT_COUNTRY = env("DEFAULT_COUNTRY", default="KE")
+
+# ---- Referrals ----
+# How long after a platform viewing a tenancy between the same tenant and landlord is attributed.
+REFERRAL_ATTRIBUTION_DAYS = env.int("REFERRAL_ATTRIBUTION_DAYS", default=60)
+REFERRAL_FEE_DUE_DAYS = env.int("REFERRAL_FEE_DUE_DAYS", default=7)
+
+# ---- Listings ----
+# When true, new listings wait for an administrator before appearing in search.
+LISTINGS_REQUIRE_APPROVAL = env.bool("LISTINGS_REQUIRE_APPROVAL", default=False)
+# Listings drop out of search when the landlord has not reconfirmed availability for this long.
+AVAILABILITY_CONFIRMATION_DAYS = env.int("AVAILABILITY_CONFIRMATION_DAYS", default=30)
 
 SENTRY_DSN = env("SENTRY_DSN", default="")
+
+# Shared secret sent by the Next.js server when rendering pages, so SSR traffic (one IP for all
+# visitors) is not throttled like a single client. Never exposed to browsers. Leave blank to disable.
+INTERNAL_API_TOKEN = env("INTERNAL_API_TOKEN", default="")
+
+# ---- Notifications ----
+# Public origin of the Next.js frontend; used to build links in emails.
+FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:3000").rstrip("/")
+# Email is optional. It is switched on only when an SMTP host is configured.
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Nyumbani <no-reply@localhost>")
+NOTIFICATION_EMAIL_ENABLED = bool(EMAIL_HOST)
 
 # ---- Legal / consent ----
 # Bump LEGAL_POLICY_VERSION whenever the Terms or Privacy Policy change in a

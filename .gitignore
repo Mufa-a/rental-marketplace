@@ -7,6 +7,8 @@ venv/
 
 # Django
 backend/.env
+backend/private_media/
+backend/staticfiles/
 *.sqlite3
 
 # Node
@@ -30,3 +32,6 @@ frontend/.env.local
 pytest-cache-files-*/
 .vscode/
 *.tsbuildinfo
+dump.rdb
+infra/production.env
+backups/

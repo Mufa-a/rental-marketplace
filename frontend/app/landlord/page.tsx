@@ -1,222 +1,200 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
-import { apiFetch, signOut } from "@/lib/api";
-import { stripImageMetadata } from "@/lib/images";
+import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api";
+import { bedroomsLabel, date, money, plural, titleCase } from "@/lib/format";
+import { newIdempotencyKey, usePaymentStatus } from "@/lib/payments";
+import { useRequireRole } from "@/lib/session";
+import { slug } from "@/lib/search";
+import { outcomeDue } from "@/lib/status";
+import type { Amenity, Payment, ViewingRequest } from "@/lib/types";
+import ListingForm from "@/components/landlord/ListingForm";
+import RequestCard from "@/components/landlord/RequestCard";
+import VerificationPanel from "@/components/landlord/VerificationPanel";
+import type { Fee, OwnProperty, OwnUnit, Stats } from "@/components/landlord/types";
+import PaymentStatusNotice from "@/components/PaymentStatusNotice";
 import PropertyLocationEditor from "@/components/PropertyLocationEditor";
 import SiteHeader from "@/components/SiteHeader";
+import VerificationBadge from "@/components/VerificationBadge";
 
-type Property = { id: number; name: string; area: string; city: string; latitude: number | null; longitude: number | null; verification_status: string };
-type Unit = { id: number; property_id: number; title: string; description: string; unit_number: string; slug: string; monthly_rent: number; bedrooms: number; furnishing: "unfurnished" | "semi_furnished" | "furnished"; available: boolean; is_published: boolean };
-type Listing = { property: Property; units: Unit[] };
-type ViewingRequest = { id: number; unit: number; unit_title: string; property_name: string; area: string; monthly_rent: number; note: string; status: string; created_at: string; viewing: { id: number; scheduled_at: string; status: string } | null };
-type ReferralFee = { id: number; viewing_id: number; unit_title: string; amount: number; status: string; due_at: string | null };
-type UploadTicket = { asset_key: string; upload: { url: string; headers: Record<string, string> } };
-const verificationLabel: Record<string, string> = { unverified: "Unverified", pending: "Awaiting review", verified: "Verified", rejected: "Verification rejected" };
-const localDateTime = (date: Date) => { date.setMinutes(date.getMinutes() - date.getTimezoneOffset()); return date.toISOString().slice(0, 16); };
-const defaultSchedule = () => { const date = new Date(); date.setDate(date.getDate() + 1); date.setHours(10, 0, 0, 0); return localDateTime(date); };
-const minimumSchedule = () => { const date = new Date(); date.setSeconds(0, 0); date.setMinutes(date.getMinutes() + 30); return localDateTime(date); };
+type Tab = "overview" | "homes" | "viewings" | "payments" | "verification";
+type Listing = { property: OwnProperty; units: OwnUnit[] };
+
+const MODERATION: Record<string, string> = { approved: "", pending_review: "Waiting for review", changes_requested: "Changes requested", rejected: "Not approved" };
+
+function unitState(unit: OwnUnit) {
+  if (unit.moderation_hold) return { text: "On hold by Nyumbani", tone: "status-danger" };
+  if (MODERATION[unit.moderation_status]) return { text: MODERATION[unit.moderation_status], tone: "status-warning" };
+  if (!unit.available) return { text: "Occupied", tone: "status-paused" };
+  if (!unit.is_published) return { text: "Draft / paused", tone: "status-paused" };
+  const stale = unit.availability_confirmed_at && Date.now() - new Date(unit.availability_confirmed_at).getTime() > 30 * 86400000;
+  return stale ? { text: "Hidden — confirm availability", tone: "status-warning" } : { text: "Live in search", tone: "" };
+}
 
 export default function LandlordDashboard() {
-  const [tab, setTab] = useState<"overview" | "homes" | "viewings" | "payments">("overview");
-  const [listings, setListings] = useState<Listing[]>([]);
+  const user = useRequireRole("landlord");
+  const [tab, setTab] = useState<Tab>("overview");
+  const [listings, setListings] = useState<Listing[] | null>(null);
   const [requests, setRequests] = useState<ViewingRequest[]>([]);
-  const [fees, setFees] = useState<ReferralFee[]>([]);
-  const [paymentPhone, setPaymentPhone] = useState("");
-  const [payingFeeId, setPayingFeeId] = useState<number | null>(null);
-  const [scheduleTimes, setScheduleTimes] = useState<Record<number, string>>({});
-  const [scheduleNotes, setScheduleNotes] = useState<Record<number, string>>({});
-  const [showForm, setShowForm] = useState(false);
-  const [propertyChoice, setPropertyChoice] = useState("new");
-  const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [verifyingId, setVerifyingId] = useState<number | null>(null);
-  const [workingRequestId, setWorkingRequestId] = useState<number | null>(null);
-  const [propertyCoordinates, setPropertyCoordinates] = useState({ latitude: "", longitude: "" });
+  const [fees, setFees] = useState<Fee[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [amenities, setAmenities] = useState<Amenity[]>([]);
+  const [verificationFee, setVerificationFee] = useState<number | null>(null);
+  const [form, setForm] = useState<{ unit?: OwnUnit; propertyId?: number } | null>(null);
+  const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const [payPhone, setPayPhone] = useState("");
+  const payment = usePaymentStatus((p: Payment) => { if (p.status === "successful") void load(); });
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const [properties, viewingRequests, referralFees] = await Promise.all([
-        apiFetch<Property[]>("/properties/mine/", {}, true),
+      const [properties, viewingRequests, referralFees, performance] = await Promise.all([
+        apiFetch<OwnProperty[]>("/properties/mine/", {}, true),
         apiFetch<ViewingRequest[]>("/viewings/requests/", {}, true),
-        apiFetch<ReferralFee[]>("/referrals/mine/", {}, true),
+        apiFetch<Fee[]>("/referrals/mine/", {}, true),
+        apiFetch<Stats>("/properties/mine/stats/", {}, true),
       ]);
-      const entries = await Promise.all(properties.map(async property => ({ property, units: await apiFetch<Unit[]>(`/properties/${property.id}/units/`, {}, true) })));
-      setListings(entries); setRequests(viewingRequests); setFees(referralFees);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not load your landlord dashboard."); }
-    finally { setLoading(false); }
-  }
-
-  useEffect(() => {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
-    const current = localStorage.getItem("rental_user");
-    let role = "";
-    try { role = current ? JSON.parse(current).role : ""; } catch { localStorage.removeItem("rental_user"); }
-    if (role && role !== "landlord") { window.location.assign(role === "admin" ? "/admin" : "/tenant"); return; }
-    try { const currentUser = current ? JSON.parse(current) : null; if (currentUser?.phone_number) setPaymentPhone(currentUser.phone_number); } catch { /* the role check above handles an invalid saved session */ }
-    void load();
+      const entries = await Promise.all(properties.map(async (property) => ({ property, units: await apiFetch<OwnUnit[]>(`/properties/${property.id}/units/`, {}, true) })));
+      setListings(entries); setRequests(viewingRequests); setFees(referralFees); setStats(performance);
+    } catch (error) { setMessage({ text: error instanceof Error ? error.message : "We could not load your dashboard.", error: true }); setListings([]); }
   }, []);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement);
-    const photos = form.getAll("photos").filter((value): value is File => value instanceof File && value.size > 0);
-    if (photos.length > 8) { setMessage("Choose up to eight photos for each home."); return; }
-    if (photos.some(file => !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024)) {
-      setMessage("Photos must be JPEG, PNG, or WebP files under 10 MB each."); return;
-    }
-    setSaving(true); setMessage("Creating your listing…");
+  useEffect(() => {
+    if (!user) return;
+    setPayPhone(user.phone_number.replace(/^\+254/, "0"));
+    const wanted = new URLSearchParams(window.location.search).get("tab") as Tab | null;
+    if (wanted) setTab(wanted);
+    void load();
+    apiFetch<Amenity[]>("/properties/amenities/").then(setAmenities).catch(() => undefined);
+    apiFetch<{ property_verification_fee: { amount: number } | null }>("/payments/prices/").then((p) => setVerificationFee(p.property_verification_fee?.amount ?? null)).catch(() => undefined);
+  }, [user, load]);
+
+  const notify = (text: string, error = false) => { setMessage({ text, error }); if (!error) void load(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+
+  async function call(path: string, method: string, body: object | undefined, success: string) {
+    try { await apiFetch(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) }, true); notify(success); }
+    catch (error) { notify(error instanceof Error ? error.message : "That did not work.", true); }
+  }
+
+  async function startPayment(path: string) {
     try {
-      let property: Property;
-      if (propertyChoice === "new") {
-        property = await apiFetch<Property>("/properties/mine/", { method: "POST", body: JSON.stringify({ name: form.get("property_name"), address_line: form.get("address"), area: form.get("area"), city: form.get("city"), county: form.get("county"), description: form.get("property_description"), latitude: Number(propertyCoordinates.latitude), longitude: Number(propertyCoordinates.longitude) }) }, true);
-      } else {
-        const existing = listings.find(item => String(item.property.id) === propertyChoice);
-        if (!existing) { setMessage("Choose a property."); return; }
-        property = existing.property;
-      }
-      let unit: Unit;
-      try {
-        unit = await apiFetch<Unit>(`/properties/${property.id}/units/`, { method: "POST", body: JSON.stringify({ unit_number: form.get("unit_number"), title: form.get("title"), unit_type: form.get("unit_type"), monthly_rent: Number(form.get("rent")), bedrooms: Number(form.get("bedrooms")), bathrooms: form.get("bathrooms"), furnishing: form.get("furnishing"), description: form.get("description"), is_published: true }) }, true);
-      } catch (error) {
-        setMessage(`Property saved, but the unit could not be published: ${error instanceof Error ? error.message : "Please try again."}`);
-        await load(); return;
-      }
-      let photoUploadFailed = false;
-      for (const photo of photos) {
-        try {
-          const cleanPhoto = await stripImageMetadata(photo);
-          const ticket = await apiFetch<UploadTicket>(`/properties/units/${unit.id}/media/presign/`, { method: "POST", body: JSON.stringify({ filename: cleanPhoto.name, content_type: cleanPhoto.type }) }, true);
-          const uploaded = await fetch(ticket.upload.url, { method: "PUT", headers: ticket.upload.headers, body: cleanPhoto });
-          if (!uploaded.ok) throw new Error("The home is live, but a photo could not be uploaded.");
-          await apiFetch(`/properties/units/${unit.id}/media/`, { method: "POST", body: JSON.stringify({ asset_key: ticket.asset_key, alt_text: `${form.get("title")}: ${photo.name}`, media_type: "other" }) }, true);
-        } catch {
-          photoUploadFailed = true;
-          break;
-        }
-      }
-      formElement.reset(); setPropertyCoordinates({ latitude: "", longitude: "" }); setPropertyChoice("new"); setShowForm(false); setMessage(photoUploadFailed ? "Your home is live, but a photo upload failed. You can retry by editing the listing later." : photos.length ? "Your home and photos are now live in search." : "Your home is now available in search."); await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not create this listing. Please try again."); }
-    finally { setSaving(false); }
+      const started = await apiFetch<Payment>(path, { method: "POST", body: JSON.stringify({ phone_number: payPhone, idempotency_key: newIdempotencyKey() }) }, true);
+      payment.track(started);
+    } catch (error) { notify(error instanceof Error ? error.message : "We could not start the M-Pesa payment.", true); }
   }
 
-  async function startVerification(propertyId: number) {
-    setVerifyingId(propertyId);
-    try {
-      const result = await apiFetch<{ message?: string }>(`/payments/property-verification/${propertyId}/pay/`, { method: "POST", body: JSON.stringify({ phone_number: paymentPhone }) }, true);
-      setMessage(result.message ?? "Check your phone to approve the KSh 2,000 verification payment.");
-      await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not start the verification payment."); }
-    finally { setVerifyingId(null); }
-  }
+  if (!user) return <main className="shell"><div className="glass empty" aria-busy="true">Loading…</div></main>;
+  const pending = requests.filter((r) => r.status === "pending_landlord");
+  const due = requests.filter(outcomeDue);
+  const upcoming = requests.filter((r) => r.status === "approved" && r.viewing?.status === "scheduled" && new Date(r.viewing.scheduled_at).getTime() > Date.now());
+  const others = requests.filter((r) => !pending.includes(r) && !due.includes(r) && !upcoming.includes(r));
+  const unpaid = fees.filter((f) => f.status === "pending");
+  const t = stats?.totals;
 
-  async function updateUnit(unit: Unit, updates: Partial<Unit>) {
-    try {
-      const { available, ...listingUpdates } = updates;
-      if (Object.keys(listingUpdates).length) await apiFetch<Unit>(`/properties/units/${unit.id}/`, { method: "PATCH", body: JSON.stringify(listingUpdates) }, true);
-      if (available !== undefined) await apiFetch<Unit>(`/properties/units/${unit.id}/availability/`, { method: "POST", body: JSON.stringify({ available }) }, true);
-      setMessage("Listing updated."); await load();
-    }
-    catch (error) { setMessage(error instanceof Error ? error.message : "We could not update this listing."); }
-  }
+  const tabs: [Tab, string][] = [["overview", "Overview"], ["homes", "Homes"], ["viewings", `Viewings${pending.length + due.length ? ` (${pending.length + due.length})` : ""}`], ["payments", `Payments${unpaid.length ? ` (${unpaid.length})` : ""}`], ["verification", "Verification"]];
 
-  function locateProperty() {
-    if (!navigator.geolocation) { setMessage("Location is unavailable in this browser. Enter the home's coordinates manually."); return; }
-    navigator.geolocation.getCurrentPosition(position => setPropertyCoordinates({ latitude: position.coords.latitude.toFixed(6), longitude: position.coords.longitude.toFixed(6) }), () => setMessage("We could not read your location. Allow location access or enter coordinates manually."), { enableHighAccuracy: true, timeout: 10000 });
-  }
-
-  async function uploadPhotos(unitId: number, title: string, photos: File[]) {
-    for (const photo of photos) {
-      const cleanPhoto = await stripImageMetadata(photo);
-      const ticket = await apiFetch<UploadTicket>(`/properties/units/${unitId}/media/presign/`, { method: "POST", body: JSON.stringify({ filename: cleanPhoto.name, content_type: cleanPhoto.type }) }, true);
-      const uploaded = await fetch(ticket.upload.url, { method: "PUT", headers: ticket.upload.headers, body: cleanPhoto });
-      if (!uploaded.ok) throw new Error("A photo could not be uploaded to storage.");
-      await apiFetch(`/properties/units/${unitId}/media/`, { method: "POST", body: JSON.stringify({ asset_key: ticket.asset_key, alt_text: `${title}: ${photo.name}`, media_type: "other" }) }, true);
-    }
-  }
-
-  async function saveUnitEdits(event: FormEvent<HTMLFormElement>, unitId: number) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const photos = form.getAll("photos").filter((value): value is File => value instanceof File && value.size > 0);
-    if (photos.length > 8) { setMessage("Choose up to eight photos at a time."); return; }
-    if (photos.some(file => !["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024)) {
-      setMessage("Photos must be JPEG, PNG, or WebP files under 10 MB each."); return;
-    }
-    setSaving(true);
-    try {
-      await apiFetch<Unit>(`/properties/units/${unitId}/`, { method: "PATCH", body: JSON.stringify({ title: form.get("title"), monthly_rent: Number(form.get("rent")), bedrooms: Number(form.get("bedrooms")), furnishing: form.get("furnishing"), description: form.get("description") }) }, true);
-      if (photos.length) await uploadPhotos(unitId, String(form.get("title")), photos);
-      setEditingUnitId(null); setMessage(photos.length ? "Listing and photos updated." : "Listing details updated."); await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not save the listing."); }
-    finally { setSaving(false); }
-  }
-
-  async function deleteUnit(unit: Unit) {
-    if (!window.confirm(`Delete “${unit.title}”? This cannot be undone.`)) return;
-    try { await apiFetch(`/properties/units/${unit.id}/`, { method: "DELETE" }, true); setMessage("Listing deleted."); await load(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "We could not delete this listing."); }
-  }
-
-  async function action(request: ViewingRequest, kind: "approve" | "reject") {
-    let body = {};
-    if (kind === "approve") {
-      const scheduled = scheduleTimes[request.id] || defaultSchedule();
-      if (new Date(scheduled).getTime() <= Date.now()) { setMessage("Choose a future viewing time before approving."); return; }
-      body = { scheduled_at: new Date(scheduled).toISOString(), meeting_note: scheduleNotes[request.id] ?? "" };
-    }
-    setWorkingRequestId(request.id);
-    try { await apiFetch(`/viewings/requests/${request.id}/${kind}/`, { method: "POST", body: JSON.stringify(body) }, true); setMessage(kind === "approve" ? "Viewing scheduled. The tenant can now see the agreed time." : "Request declined."); await load(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "We could not update the request."); }
-    finally { setWorkingRequestId(null); }
-  }
-
-  async function updateViewing(viewingId: number, kind: "complete" | "outcome", choice?: string) {
-    try {
-      const result = await apiFetch<{ payment_status?: string }>(`/viewings/${viewingId}/${kind}/`, { method: "POST", body: JSON.stringify(kind === "outcome" ? { choice } : {}) }, true);
-      setMessage(kind === "complete" ? "Viewing marked complete." : choice === "rented" ? result.payment_status === "pending" ? "Rental reported. The unit is off the marketplace and an M-Pesa prompt has been sent to your registered phone." : "Rental reported and the unit is off the marketplace, but M-Pesa could not start. The fee is listed below so you can retry." : "Viewing outcome recorded."); await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not update the viewing."); }
-  }
-
-  async function payReferralFee(feeId: number) {
-    setPayingFeeId(feeId);
-    try {
-      const result = await apiFetch<{ message?: string }>(`/payments/referral-fees/${feeId}/pay/`, { method: "POST", body: JSON.stringify({ phone_number: paymentPhone }) }, true);
-      setMessage(result.message ?? "A payment prompt is already pending. Check your phone to complete it.");
-      await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "We could not start the M-Pesa payment."); }
-    finally { setPayingFeeId(null); }
-  }
-
-  const pending = requests.filter(item => item.status === "pending_landlord");
-  const reportsDue = requests.filter(item => item.viewing && (item.viewing.status === "outcome_pending" || (item.viewing.status === "scheduled" && new Date(item.viewing.scheduled_at).getTime() <= Date.now())));
-  const totalUnits = listings.reduce((total, item) => total + item.units.length, 0);
-  const activeUnits = listings.reduce((total, item) => total + item.units.filter(u => u.is_published && u.available).length, 0);
-  const upcomingViewings = requests.filter(item => item.viewing && item.viewing.status === "scheduled" && new Date(item.viewing.scheduled_at).getTime() > Date.now()).length;
-  const overview = [
-    ["Properties", listings.length, "sage"],
-    ["Units", totalUnits, "sage"],
-    ["Active listings", activeUnits, "gold"],
-    ["Viewing requests awaiting reply", pending.length, pending.length > 0 ? "danger" : "sage"],
-    ["Upcoming viewings", upcomingViewings, "gold"],
-    ["Success fees pending", fees.filter(f => f.status === "pending").length, "gold"],
-  ] as [string, number, string][];
-  return <main className="shell"><SiteHeader right={<><Link className="navlink" href="/profile">Profile</Link><button className="button-secondary" onClick={signOut}>Sign out</button></>} />
-    <nav className="tabbar" role="tablist" aria-label="Dashboard sections">{([["overview", "Overview"], ["homes", "Homes"], ["viewings", `Viewings${pending.length ? ` (${pending.length})` : ""}`], ["payments", "Payments"]] as [typeof tab, string][]).map(([id, text]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{text}</button>)}</nav>
-    {!loading && listings.length > 0 && <section hidden={tab !== "overview"} className="admin-metrics" aria-label="Portfolio overview">{overview.map(([title, value, accent]) => <article className={`glass admin-metric accent-${accent}`} key={title}><span className="muted">{title}</span><strong>{value}</strong></article>)}</section>}
-    {reportsDue.length > 0 && <section className="glass activity-card outcome-first"><p className="eyebrow">Action needed first</p><h2>Report the viewing result</h2><p className="muted">If you rented this unit, report it here. We will take it off the marketplace and send an M-Pesa success-fee prompt to your registered phone.</p>{reportsDue.map(item => <div className="outcome-first-row" key={item.viewing!.id}><div><strong>{item.unit_title || `Home #${item.unit}`}</strong><p className="muted">{item.property_name} · KSh {Number(item.monthly_rent).toLocaleString()} / month</p></div><div className="outcome-actions"><button onClick={() => void updateViewing(item.viewing!.id, "outcome", "rented")}>Rented this home</button><button className="button-secondary" onClick={() => void updateViewing(item.viewing!.id, "outcome", "did_not_rent")}>Did not rent</button><button className="button-secondary" onClick={() => void updateViewing(item.viewing!.id, "outcome", "still_deciding")}>Still deciding</button></div></div>)}</section>}
-    <section hidden={tab !== "homes"} className="dashboard-intro"><p className="eyebrow">Landlord dashboard</p><h1>Manage your homes</h1><p className="muted">Keep your listings current and respond to viewing requests from one place.</p><button onClick={() => { if (!showForm) setPropertyChoice("new"); setShowForm(value => !value); }}>{showForm ? "Close listing form" : "Add a home"}</button></section>
-    <section hidden={tab !== "payments"} className="dashboard-content"><div className="section-heading"><div><p className="eyebrow">Landlord success fees</p><h2>Referral fees</h2></div></div>{fees.length === 0 && <p className="muted">A fee is created when you report that a viewing converted to a rental, and the M-Pesa prompt is sent automatically.</p>}{fees.map(fee => <article className="glass activity-card" key={fee.id}><div className="activity-heading"><div><span className={`status status-${fee.status}`}>{fee.status}</span><h3>{fee.unit_title}</h3><p className="muted">KSh {fee.amount.toLocaleString()}{fee.due_at ? ` · Due ${new Date(fee.due_at).toLocaleDateString()}` : ""}</p></div>{fee.status === "pending" && <button disabled={payingFeeId === fee.id || !paymentPhone.trim()} onClick={() => void payReferralFee(fee.id)}>{payingFeeId === fee.id ? "Connecting…" : "Pay with M-Pesa"}</button>}</div>{fee.status === "pending" && <label>M-Pesa phone number<input type="tel" inputMode="tel" autoComplete="tel" value={paymentPhone} onChange={event => setPaymentPhone(event.target.value)} placeholder="0712345678" aria-label="M-Pesa phone number" /></label>}</article>)}</section>
-    {message && <p className="dashboard-message" role="status" aria-live="polite">{message}</p>}
-    {showForm && <section hidden={tab !== "homes"} className="glass form-panel"><p className="eyebrow">New rental</p><h2>Property and unit details</h2><form onSubmit={submit} className="listing-form"><label className="form-wide">Property<select value={propertyChoice} onChange={event => setPropertyChoice(event.target.value)}><option value="new">New property</option>{listings.map(({ property }) => <option key={property.id} value={String(property.id)}>{property.name} · {property.area}</option>)}</select></label>{propertyChoice === "new" && (<><label>Property name<input name="property_name" maxLength={180} required placeholder="Green Apartments" /></label><label>Street address<input name="address" maxLength={255} required placeholder="12 Parklands Road" /></label><label>Area<input name="area" maxLength={100} required placeholder="Westlands" /></label><label>City<input name="city" maxLength={100} required defaultValue="Nairobi" /></label><label>County<input name="county" maxLength={100} required defaultValue="Nairobi" /></label><label>Property description<input name="property_description" placeholder="Optional overview" /></label><div className="form-wide"><p className="eyebrow">Map location</p><p className="muted">This pin powers nearby search. Use your phone location only when you are at the property; otherwise enter the property coordinates manually. Public pins are shown approximately.</p><button type="button" className="button-secondary" onClick={locateProperty}>Use my current location</button></div><label>Latitude<input type="number" step="any" min="-90" max="90" required value={propertyCoordinates.latitude} onChange={event => setPropertyCoordinates({ ...propertyCoordinates, latitude: event.target.value })} placeholder="-1.2676" /></label><label>Longitude<input type="number" step="any" min="-180" max="180" required value={propertyCoordinates.longitude} onChange={event => setPropertyCoordinates({ ...propertyCoordinates, longitude: event.target.value })} placeholder="36.8108" /></label></>)}<label>Unit number<input name="unit_number" maxLength={50} required placeholder="A03" /></label><label>Listing title<input name="title" maxLength={180} required placeholder="Bright one bedroom apartment" /></label><label>Home type<select name="unit_type"><option value="apartment">Apartment</option><option value="studio">Studio</option><option value="bedsitter">Bedsitter</option><option value="house">House</option><option value="maisonette">Maisonette</option><option value="room">Room</option></select></label><label>Monthly rent (KSh)<input name="rent" type="number" min="1" required placeholder="26000" /></label><label>Bedrooms<input name="bedrooms" type="number" min="0" max="99" defaultValue="1" required /></label><label>Bathrooms<input name="bathrooms" type="number" step="0.5" min="0.5" max="99" defaultValue="1" required /></label><label>Furnishing<select name="furnishing" defaultValue="unfurnished"><option value="unfurnished">Unfurnished</option><option value="semi_furnished">Semi-furnished</option><option value="furnished">Furnished</option></select></label><label className="form-wide">Photos <span className="muted">(up to 8; JPEG, PNG, or WebP, 10 MB each)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple /></label><label className="form-wide">About this home<textarea name="description" maxLength={5000} rows={4} placeholder="Describe the rooms, light, and nearby transport." /></label><button type="submit" disabled={saving} className="form-wide">{saving ? "Publishing…" : "Publish home"}</button></form></section>}
-    <section hidden={tab !== "homes"} className="dashboard-content"><div className="section-heading"><div><p className="eyebrow">Your portfolio</p><h2>Rental homes</h2></div><span className="muted">{listings.reduce((total, item) => total + item.units.length, 0)} units</span></div>
-      {loading && <div className="glass empty">Loading your listings…</div>}
-      {!loading && listings.length === 0 && <div className="glass empty"><h3>Your homes will show here</h3><p>Add a property and unit to make your first rental searchable.</p><button onClick={() => { setPropertyChoice("new"); setShowForm(true); }}>Add a home</button></div>}
-      <div className="owner-list">{listings.map(({ property, units }) => <section className="glass owner-property" key={property.id}><div className="activity-heading"><div><h3>{property.name}</h3><p className="muted">{property.area}, {property.city}</p></div><div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><span className="status">{units.length} {units.length === 1 ? "unit" : "units"}</span><button type="button" className="button-secondary" onClick={() => { setPropertyChoice(String(property.id)); setShowForm(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Add a unit</button></div></div><div className="verify-box"><span className={`badge badge-${property.verification_status === "verified" ? "verified" : property.verification_status === "pending" ? "pending" : "unverified"}`}>{verificationLabel[property.verification_status] ?? "Unverified"}</span>{["unverified", "rejected"].includes(property.verification_status) && <><input type="tel" inputMode="tel" aria-label="M-Pesa phone number" value={paymentPhone} onChange={event => setPaymentPhone(event.target.value)} placeholder="0712345678" /><button disabled={verifyingId === property.id || !paymentPhone.trim()} onClick={() => void startVerification(property.id)}>{verifyingId === property.id ? "Connecting…" : "Get verified · KSh 2,000"}</button></>}<p className="muted">Verified properties are checked by our team and shown first in search.</p></div><PropertyLocationEditor propertyId={property.id} latitude={property.latitude} longitude={property.longitude} onSaved={() => void load()} />{units.length === 0 && <p className="muted">No units yet. Reopen the listing form to publish a unit.</p>}{units.map(unit => <article className="owner-unit-wrap" key={unit.id}><div className="owner-unit"><div><strong>{unit.title}</strong><p className="muted">Unit {unit.unit_number} · KSh {unit.monthly_rent.toLocaleString()} / month · {unit.bedrooms} bed · {unit.furnishing.replaceAll("_", " ")}</p><span className={`status ${unit.is_published && unit.available ? "" : "status-paused"}`}>{unit.is_published && unit.available ? "Visible in search" : "Paused"}</span></div><div className="owner-actions"><button className="button-secondary" onClick={() => setEditingUnitId(editingUnitId === unit.id ? null : unit.id)}>{editingUnitId === unit.id ? "Close edit" : "Edit"}</button><button className="button-secondary" onClick={() => void updateUnit(unit, { is_published: !(unit.is_published && unit.available), available: !(unit.is_published && unit.available) })}>{unit.is_published && unit.available ? "Pause" : "Publish"}</button><button className="button-danger" onClick={() => void deleteUnit(unit)}>Delete</button></div></div>{editingUnitId === unit.id && <form className="unit-edit-form" onSubmit={event => void saveUnitEdits(event, unit.id)}><label>Listing title<input name="title" maxLength={180} required defaultValue={unit.title} /></label><label>Monthly rent (KSh)<input name="rent" type="number" min="1" required defaultValue={unit.monthly_rent} /></label><label>Bedrooms<input name="bedrooms" type="number" min="0" max="99" required defaultValue={unit.bedrooms} /></label><label>Furnishing<select name="furnishing" defaultValue={unit.furnishing}><option value="unfurnished">Unfurnished</option><option value="semi_furnished">Semi-furnished</option><option value="furnished">Furnished</option></select></label><label className="form-wide">Description<textarea name="description" maxLength={5000} rows={3} defaultValue={unit.description} /></label><label className="form-wide">Add photos <span className="muted">(up to 8; JPEG, PNG, or WebP, 10 MB each)</span><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" multiple /></label><button className="form-wide" type="submit" disabled={saving}>{saving ? "Saving…" : "Save listing"}</button></form>}</article>)}</section>)}</div>
+  return <main className="shell">
+    <SiteHeader />
+    <section className="dashboard-intro">
+      <div><p className="eyebrow">Landlord dashboard</p><h1>Your homes</h1><p className="muted">Listings, viewing requests and results in one place.</p></div>
+      <button onClick={() => { setTab("homes"); setForm({}); }}>Add a home</button>
     </section>
-    <section hidden={tab !== "viewings"} className="dashboard-content"><div className="section-heading"><div><p className="eyebrow">Responses needed</p><h2>Viewing requests</h2></div><span className="muted">{pending.length} awaiting your reply</span></div>{!loading && pending.length === 0 && <div className="glass empty">New viewing requests will appear here.</div>}{pending.map(item => <article className="glass activity-card request-card" key={item.id}><div className="activity-heading"><div><span className="status">New request</span><h3>{item.unit_title || `Home #${item.unit}`}</h3><p className="muted">{item.property_name}{item.area ? ` · ${item.area}` : ""} · KSh {Number(item.monthly_rent || 0).toLocaleString()} / month</p></div><time className="muted">{new Date(item.created_at).toLocaleDateString()}</time></div><div className="request-message"><span className="eyebrow">Tenant’s message</span><p>{item.note || "The tenant did not add a message."}</p></div><div className="request-schedule"><label>Viewing date and time<input type="datetime-local" min={minimumSchedule()} value={scheduleTimes[item.id] ?? defaultSchedule()} onChange={e => setScheduleTimes({ ...scheduleTimes, [item.id]: e.target.value })} /></label><p className="muted">Suggested time: tomorrow at 10:00. Change it to a time that works for both of you.</p><label>Meeting details <span className="muted">(optional)</span><input maxLength={500} value={scheduleNotes[item.id] ?? ""} onChange={e => setScheduleNotes({ ...scheduleNotes, [item.id]: e.target.value })} placeholder="For example, meet at the main entrance" /></label></div><div className="request-actions"><button disabled={workingRequestId === item.id} onClick={() => void action(item, "approve")}>{workingRequestId === item.id ? "Saving…" : "Approve viewing"}</button><button className="button-secondary" disabled={workingRequestId === item.id} onClick={() => void action(item, "reject")}>Decline request</button></div></article>)}</section>
-    <section hidden={tab !== "viewings"} className="dashboard-content"><div className="section-heading"><div><p className="eyebrow">Your schedule</p><h2>Viewings and outcomes</h2></div></div>{!loading && requests.filter(item => item.viewing).length === 0 && <div className="glass empty">Approved and completed viewings will appear here.</div>}{requests.filter(item => item.viewing).map(item => <article className="glass activity-card" key={item.viewing!.id}><div className="activity-heading"><div><span className="status">{item.viewing ? item.viewing.status.replaceAll("_", " ") : "Scheduled"}</span><h3>Home #{item.unit}</h3></div><time className="muted">{item.viewing && new Date(item.viewing.scheduled_at).toLocaleString()}</time></div>{item.viewing?.status === "scheduled" && <button className="button-secondary" onClick={() => void updateViewing(item.viewing!.id, "complete")}>Mark viewing complete</button>}{item.viewing?.status === "outcome_pending" && <p className="muted">Please submit the result at the top of this page.</p>}</article>)}</section>
+    <nav className="tabbar" role="tablist" aria-label="Dashboard sections">{tabs.map(([id, text]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => { setTab(id); setForm(null); }}>{text}</button>)}</nav>
+    {message && <p className={`notice ${message.error ? "notice-error" : "notice-success"}`} role="status" aria-live="polite">{message.text}</p>}
+    {listings === null && <div className="glass skeleton-card short" aria-busy="true" />}
+
+    {tab === "overview" && listings && <>
+      {(pending.length > 0 || due.length > 0 || unpaid.length > 0) && <section className="glass activity-card outcome-first">
+        <p className="eyebrow">Needs your attention</p>
+        <ul className="todo">
+          {pending.length > 0 && <li><button className="linklike" onClick={() => setTab("viewings")}>{plural(pending.length, "viewing request")} waiting for your reply</button> — unanswered requests expire after 7 days.</li>}
+          {due.length > 0 && <li><button className="linklike" onClick={() => setTab("viewings")}>{plural(due.length, "viewing")} need an outcome report</button>.</li>}
+          {unpaid.length > 0 && <li><button className="linklike" onClick={() => setTab("payments")}>{plural(unpaid.length, "success fee")} to pay</button>.</li>}
+        </ul>
+      </section>}
+      {t && <section className="admin-metrics" aria-label="Last 30 days">
+        {([["Listing views (30 days)", t.views_30d], ["Saved by tenants", t.saves], ["Viewing requests", t.requests], ["Approved viewings", t.approved], ["Completed viewings", t.completed], ["Rentals", t.rented]] as [string, number][]).map(([label, value]) =>
+          <article className="glass admin-metric" key={label}><span className="muted">{label}</span><strong>{value}</strong></article>)}
+      </section>}
+      {stats && stats.units.length > 0 ? <section className="glass table-wrap" aria-labelledby="perf-title">
+        <h2 id="perf-title" className="table-title">Listing performance</h2>
+        <table className="data-table">
+          <thead><tr><th scope="col">Home</th><th scope="col">Status</th><th scope="col">Views 7d</th><th scope="col">Views 30d</th><th scope="col">Saves</th><th scope="col">Requests</th><th scope="col">Completed</th><th scope="col">Rented</th></tr></thead>
+          <tbody>{stats.units.map((u) => <tr key={u.unit_id}><td><strong>{u.title}</strong><br /><span className="muted small">{u.property}</span></td><td>{u.visible_in_search ? "Live" : MODERATION[u.moderation_status] || "Not in search"}</td><td>{u.views_7d}</td><td>{u.views_30d}</td><td>{u.saves}</td><td>{u.requests}</td><td>{u.completed}</td><td>{u.rented}</td></tr>)}</tbody>
+        </table>
+        {t?.request_rate != null && <p className="muted small">{Math.round(t.request_rate * 100)}% of views turned into a viewing request in the last 30 days. Clear photos and accurate rent usually raise this.</p>}
+      </section> : listings.length === 0 && <div className="glass empty"><h3>List your first home</h3><p>Listing is free. Tenants request viewings; you approve the ones that suit you.</p><button onClick={() => { setTab("homes"); setForm({}); }}>Add a home</button></div>}
+    </>}
+
+    {tab === "homes" && listings && <section className="dashboard-content">
+      {form && <section className="glass form-panel"><h2>{form.unit ? `Edit “${form.unit.title}”` : "New listing"}</h2>
+        <ListingForm properties={listings.map((l) => l.property)} amenities={amenities} unit={form.unit} defaultPropertyId={form.propertyId}
+                     onDone={(text) => { setForm(null); notify(text); }} onCancel={() => setForm(null)} /></section>}
+      {listings.length === 0 && !form && <div className="glass empty"><h3>No homes yet</h3><button onClick={() => setForm({})}>Add a home</button></div>}
+      {listings.map(({ property, units }) => <section className="glass owner-property" key={property.id}>
+        <div className="activity-heading">
+          <div><h3>{property.name}</h3><p className="muted">{property.address_line} · {property.area}, {property.city}</p></div>
+          <button type="button" className="button-secondary button-small" onClick={() => setForm({ propertyId: property.id })}>Add a unit</button>
+        </div>
+        <div className="verify-box">
+          <VerificationBadge status={property.verification_status} showUnverified />
+          {property.verification_status === "pending" && <span className="muted small">Our team is reviewing this property.</span>}
+          {property.verification_status === "needs_review" && <span className="muted small">The address changed, so we will re-check it (no extra fee).</span>}
+          {["unverified", "rejected", "needs_review"].includes(property.verification_status) && verificationFee != null &&
+            <button className="button-secondary button-small" onClick={() => void startPayment(`/payments/property-verification/${property.id}/pay/`)}>
+              {property.verification_status === "unverified" ? `Request property verification · ${money(verificationFee)}` : "Resubmit for review"}</button>}
+        </div>
+        <PropertyLocationEditor propertyId={property.id} latitude={property.latitude} longitude={property.longitude} onSaved={() => void load()} />
+        {units.length === 0 && <p className="muted">No units yet.</p>}
+        {units.map((unit) => { const state = unitState(unit); return <article className="owner-unit-wrap" key={unit.id}>
+          <div className="owner-unit">
+            <div>
+              <strong>{unit.title}</strong>
+              <p className="muted small">Unit {unit.unit_number} · {money(unit.monthly_rent)}/month · {bedroomsLabel(unit.bedrooms, unit.unit_type)} · {plural(unit.media.length, "photo")}</p>
+              <span className={`status ${state.tone}`}>{state.text}</span>
+              {unit.moderation_note && unit.moderation_status !== "approved" && <p className="notice notice-warning small">{unit.moderation_note}</p>}
+              {unit.available && unit.availability_confirmed_at && <p className="muted small">Availability confirmed {date(unit.availability_confirmed_at)}</p>}
+            </div>
+            <div className="owner-actions">
+              <button className="button-secondary button-small" onClick={() => setForm({ unit })}>Edit</button>
+              {unit.available
+                ? <><button className="button-secondary button-small" onClick={() => void call(`/properties/units/${unit.id}/availability/`, "POST", { available: true }, "Availability confirmed for another 30 days.")}>Still available</button>
+                    <button className="button-secondary button-small" onClick={() => { if (window.confirm("Mark this home as occupied? It leaves search, open requests are closed and recent viewers are asked whether they rented it.")) void call(`/properties/units/${unit.id}/availability/`, "POST", { available: false }, "Marked as occupied and removed from search."); }}>Mark occupied</button></>
+                : <button className="button-secondary button-small" onClick={() => void call(`/properties/units/${unit.id}/availability/`, "POST", { available: true }, "Marked available again.")}>Available again</button>}
+              <button className="button-secondary button-small" disabled={unit.moderation_hold} onClick={() => void call(`/properties/units/${unit.id}/`, "PATCH", { is_published: !unit.is_published }, unit.is_published ? "Listing paused." : "Listing published.")}>{unit.is_published ? "Pause" : "Publish"}</button>
+              <button className="button-danger button-small" onClick={() => { if (window.confirm(`Delete “${unit.title}”? Homes with viewing history can only be paused.`)) void call(`/properties/units/${unit.id}/`, "DELETE", undefined, "Listing deleted."); }}>Delete</button>
+              {unitState(unit).text === "Live in search" && <Link className="navlink small" href={`/listings/${slug(property.city)}/${slug(property.area)}/${unit.slug}`}>View</Link>}
+            </div>
+          </div>
+        </article>; })}
+      </section>)}
+    </section>}
+
+    {tab === "viewings" && <section className="dashboard-content">
+      {([["Waiting for your reply", pending], ["Report the outcome", due], ["Upcoming viewings", upcoming], ["Earlier", others]] as [string, ViewingRequest[]][])
+        .filter(([, list]) => list.length).map(([heading, list]) => <div key={heading}><h2 className="group-title">{heading} <span className="muted">({list.length})</span></h2>
+          {list.map((item) => <RequestCard key={item.id} item={item} onChanged={notify} />)}</div>)}
+      {requests.length === 0 && <div className="glass empty"><h3>No viewing requests yet</h3><p>When tenants ask to view your homes, their requests appear here.</p></div>}
+    </section>}
+
+    {tab === "payments" && <section className="dashboard-content">
+      <div className="glass form-panel">
+        <h2>Success fees</h2>
+        <p className="muted">A success fee is owed only when a tenant you met through a Nyumbani viewing rents your home. Listing and viewings are free for landlords. <Link href="/viewing-packages#landlord-fees">How fees are calculated</Link>.</p>
+        <label className="narrow-field">M-Pesa number for prompts<input type="tel" inputMode="tel" value={payPhone} onChange={(e) => setPayPhone(e.target.value)} /></label>
+        {payment.payment && <PaymentStatusNotice payment={payment.payment} onRefresh={() => void payment.refresh()} />}
+      </div>
+      {fees.length === 0 && <div className="glass empty">No success fees yet.</div>}
+      {fees.map((fee) => <article className="glass activity-card" key={fee.id}>
+        <div className="activity-heading">
+          <div><span className={`status ${fee.status === "pending" ? "status-warning" : ""}`}>{titleCase(fee.status)}</span><h3>{fee.unit_title}</h3>
+            <p className="muted">{money(fee.amount, fee.currency)}{fee.monthly_rent ? ` (rent ${money(fee.monthly_rent)})` : ""}{fee.due_at && fee.status === "pending" ? ` · due ${date(fee.due_at)}` : ""}{fee.paid_at ? ` · paid ${date(fee.paid_at)}` : ""}</p></div>
+          {fee.status === "pending" && <button disabled={!payPhone.trim() || payment.payment?.status === "pending"} onClick={() => void startPayment(`/payments/referral-fees/${fee.id}/pay/`)}>Pay with M-Pesa</button>}
+        </div>
+        {fee.status === "pending" && <p className="muted small">Think this is wrong? Reply to the outcome on the viewing or contact support before the due date — fees can be reviewed or waived.</p>}
+      </article>)}
+    </section>}
+
+    {tab === "verification" && <section className="dashboard-content"><VerificationPanel /></section>}
   </main>;
 }

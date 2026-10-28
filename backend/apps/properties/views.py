@@ -1,16 +1,15 @@
 import hashlib
 import json
-import math
 import os
-from uuid import uuid4
 from datetime import timedelta
+from uuid import uuid4
 
 import boto3
+from botocore.config import Config
 from django.conf import settings
 from django.core.cache import cache
-from django.db import connection
-from django.db.models import ProtectedError
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Count, F, Min, ProtectedError, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -21,13 +20,18 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from apps.accounts.models import LandlordProfile, User
-from botocore.config import Config
+from apps.accounts.models import LandlordProfile, TenantProfile, User
 from apps.core.models import AuditLog
+from apps.core.permissions import is_platform_admin
+from apps.core.throttles import PublicScopedRateThrottle
 
-from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit
+from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit, UnitDailyStat
 from .permissions import IsLandlordOrAdmin, can_manage
-from .serializers import AmenitySerializer, PresignUploadSerializer, PropertyMediaSerializer, PropertySerializer, SavedUnitSerializer, UnitSerializer
+from .search import ORDERINGS, SearchFilters, apply_filters, apply_ordering, public_units
+from .serializers import (
+    AmenitySerializer, PresignUploadSerializer, PropertyMediaSerializer, PropertySerializer, PublicUnitSerializer,
+    SavedUnitSerializer, UnitSerializer,
+)
 
 
 def _profile_for(request):
@@ -39,8 +43,8 @@ def _profile_for(request):
     return get_object_or_404(LandlordProfile, user_id=landlord_user_id)
 
 
-def _audit(request, action, obj):
-    AuditLog.objects.create(actor=request.user, action=action, object_type=obj._meta.label, object_id=str(obj.pk))
+def _audit(request, action, obj, **metadata):
+    AuditLog.objects.create(actor=request.user, action=action, object_type=obj._meta.label, object_id=str(obj.pk), metadata=metadata)
 
 
 def _delete_or_conflict(request, obj, action, what, alternative):
@@ -66,16 +70,40 @@ def _invalidate_public_listing_cache():
 
 def _owned_property(request, property_id):
     properties = Property.objects.select_related("landlord__user")
-    if request.user.role != User.Role.ADMIN:
+    if not is_platform_admin(request.user):
         properties = properties.filter(landlord__user=request.user)
     return get_object_or_404(properties, pk=property_id)
 
 
 def _owned_unit(request, unit_id):
     units = Unit.objects.select_related("property__landlord__user")
-    if request.user.role != User.Role.ADMIN:
+    if not is_platform_admin(request.user):
         units = units.filter(property__landlord__user=request.user)
     return get_object_or_404(units, pk=unit_id)
+
+
+def _public_queryset():
+    return public_units().select_related("property__landlord").prefetch_related("amenities", "media")
+
+
+def find_possible_duplicate(unit):
+    """Another landlord's listing that looks like the same home: same place, rent, size, and title or address."""
+    prop = unit.property
+    return (Unit.objects.exclude(pk=unit.pk).exclude(property__landlord=prop.landlord)
+            .filter(property__city__iexact=prop.city, property__area__iexact=prop.area, monthly_rent=unit.monthly_rent,
+                    bedrooms=unit.bedrooms, unit_type=unit.unit_type)
+            .filter(Q(title__iexact=unit.title) | Q(property__address_line__iexact=prop.address_line))
+            .order_by("created_at").first())
+
+
+def _hold_for_review(unit, note, duplicate=None):
+    unit.moderation_status = Unit.ModerationStatus.PENDING_REVIEW
+    unit.moderation_note = note[:500]
+    fields = ["moderation_status", "moderation_note", "updated_at"]
+    if duplicate is not None:
+        unit.possible_duplicate_of = duplicate
+        fields.append("possible_duplicate_of")
+    unit.save(update_fields=fields)
 
 
 class AmenityListView(APIView):
@@ -85,31 +113,56 @@ class AmenityListView(APIView):
         return Response(AmenitySerializer(Amenity.objects.all(), many=True).data)
 
 
+class LocationSuggestView(APIView):
+    """GET /properties/locations/?q=kil — counties, towns and estates that currently have homes, with counts."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [PublicScopedRateThrottle]
+    throttle_scope = "public_search"
+
+    def get(self, request):
+        q = request.query_params.get("q", "").strip()[:60]
+        version = cache.get_or_set("public-listings:version", 1, timeout=None)
+        key = f"locations:{version}:{hashlib.sha256(q.lower().encode()).hexdigest()}"
+        if (cached := cache.get(key)) is not None:
+            return Response(cached)
+        units = public_units()
+        if q:
+            units = units.filter(Q(property__area__icontains=q) | Q(property__city__icontains=q) | Q(property__county__icontains=q))
+        rows = (units.values("property__county", "property__city", "property__area")
+                .annotate(listings=Count("id"), lowest_rent=Min("monthly_rent")).order_by("-listings", "property__area")[:20])
+        data = [{"county": r["property__county"], "town": r["property__city"], "estate": r["property__area"],
+                 "listings": r["listings"], "lowest_rent": r["lowest_rent"]} for r in rows]
+        cache.set(key, data, timeout=300)
+        return Response(data)
+
+
 class SavedUnitListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _tenant(self, request):
         if request.user.role != User.Role.TENANT:
             raise PermissionDenied("Only tenants can save rental homes.")
-        from apps.accounts.models import TenantProfile
         return TenantProfile.objects.get_or_create(user=request.user)[0]
 
     def get(self, request):
         tenant = self._tenant(request)
-        saved = SavedUnit.objects.filter(tenant=tenant).select_related("unit__property").prefetch_related("unit__amenities", "unit__media")
-        return Response(SavedUnitSerializer(saved, many=True).data)
+        saved = SavedUnit.objects.filter(tenant=tenant).select_related("unit__property__landlord").prefetch_related("unit__amenities", "unit__media")
+        available = set(public_units().filter(saved_by__tenant=tenant).values_list("pk", flat=True))
+        return Response(SavedUnitSerializer(saved, many=True, context={"available_ids": available}).data)
 
     def post(self, request):
         tenant = self._tenant(request)
         serializer = SavedUnitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         unit = serializer.validated_data["unit"]
-        if not unit.is_published or not unit.available or not unit.property.is_active:
+        if not public_units().filter(pk=unit.pk).exists():
             raise ValidationError("This home is no longer available to save.")
         saved, created = SavedUnit.objects.get_or_create(tenant=tenant, unit=unit)
         if created:
             _audit(request, "unit.saved", saved)
-        return Response(SavedUnitSerializer(saved).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        return Response(SavedUnitSerializer(saved, context={"available_ids": {unit.pk}}).data,
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class SavedUnitDetailView(APIView):
@@ -124,172 +177,78 @@ class SavedUnitDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class SearchPagination(CursorPagination):
+    page_size = 20
+
+
 class PublicUnitSearchView(APIView):
-    """Public, availability-only listing query used by the Phase 4 search UI."""
+    """Public listing search. Filters are documented in apps/properties/search.py."""
+
     permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [PublicScopedRateThrottle]
     throttle_scope = "public_search"
 
-    class FiltersSerializer(serializers.Serializer):
-        city = serializers.CharField(max_length=100, required=False)
-        area = serializers.CharField(max_length=100, required=False)
-        min_rent = serializers.IntegerField(min_value=0, required=False)
-        max_rent = serializers.IntegerField(min_value=1, required=False)
-        bedrooms = serializers.IntegerField(min_value=0, required=False)
-        amenity = serializers.SlugField(max_length=90, required=False)
-        unit_type = serializers.ChoiceField(choices=Unit.UnitType.choices, required=False)
-        furnishing = serializers.ChoiceField(choices=Unit.Furnishing.choices, required=False)
-        move_in_date = serializers.DateField(required=False)
-        latitude = serializers.FloatField(min_value=-90, max_value=90, required=False)
-        longitude = serializers.FloatField(min_value=-180, max_value=180, required=False)
-        radius_km = serializers.FloatField(min_value=0.1, max_value=100, required=False)
-        ordering = serializers.ChoiceField(choices=("-created_at", "monthly_rent", "-monthly_rent", "bedrooms", "distance"), required=False, default="-created_at")
-
-        def validate(self, attrs):
-            if attrs.get("min_rent", 0) > attrs.get("max_rent", 2**31 - 1):
-                raise serializers.ValidationError("Minimum rent must not exceed maximum rent.")
-            if ("latitude" in attrs) != ("longitude" in attrs):
-                raise serializers.ValidationError("Latitude and longitude must be provided together.")
-            if "radius_km" in attrs and "latitude" not in attrs:
-                raise serializers.ValidationError("Radius search requires latitude and longitude.")
-            if attrs.get("ordering") == "distance" and "latitude" not in attrs:
-                raise serializers.ValidationError("Distance sorting requires your location.")
-            return attrs
-
     def get(self, request):
-        filters = self.FiltersSerializer(data=request.query_params)
+        filters = SearchFilters(data=request.query_params)
         filters.is_valid(raise_exception=True)
         params = filters.validated_data
         query_key = hashlib.sha256(json.dumps(sorted(request.query_params.items()), separators=(",", ":")).encode()).hexdigest()
-        version = cache.get_or_set("public-listings:version", "1")
+        version = cache.get_or_set("public-listings:version", 1, timeout=None)
         cache_key = f"public-listings:{version}:{query_key}"
-        cached = cache.get(cache_key)
-        if cached is not None:
+        if (cached := cache.get(cache_key)) is not None:
             return Response(cached)
-        units = Unit.objects.filter(
-            is_published=True, available=True, property__is_active=True,
-            availability_confirmed_at__gte=timezone.now() - timedelta(days=30),
-        ).select_related("property").prefetch_related("amenities", "media")
-        for field in ("city", "area"):
-            if value := params.get(field):
-                units = units.filter(**{f"property__{field}__icontains": value.strip()})
-        if "min_rent" in params:
-            units = units.filter(monthly_rent__gte=params["min_rent"])
-        if "max_rent" in params:
-            units = units.filter(monthly_rent__lte=params["max_rent"])
-        if "bedrooms" in params:
-            units = units.filter(bedrooms=params["bedrooms"]) if params["bedrooms"] == 0 else units.filter(bedrooms__gte=params["bedrooms"])
-        if "unit_type" in params:
-            units = units.filter(unit_type=params["unit_type"])
-        if "furnishing" in params:
-            units = units.filter(furnishing=params["furnishing"])
-        if "move_in_date" in params:
-            units = units.filter(Q(available_from__isnull=True) | Q(available_from__lte=params["move_in_date"]))
-        if "amenity" in params:
-            units = units.filter(amenities__slug=params["amenity"])
-        if "radius_km" in params:
-            longitude, latitude = params["longitude"], params["latitude"]
-            if connection.vendor == "postgresql":
-                nearby_properties = Property.objects.extra(
-                    where=["ST_DWithin(properties_property.location, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)"],
-                    params=[longitude, latitude, params["radius_km"] * 1000],
-                ).values("id")
-                units = units.filter(property_id__in=nearby_properties)
-            else:
-                from .fields import GeographicPoint
-                property_ids = []
-                for property_id, point in Property.objects.exclude(location__isnull=True).values_list("id", "location"):
-                    if isinstance(point, GeographicPoint):
-                        dlat = math.radians(point.latitude - latitude)
-                        dlon = math.radians(point.longitude - longitude)
-                        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(latitude)) * math.cos(math.radians(point.latitude)) * math.sin(dlon / 2) ** 2
-                        if 6371 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)) <= params["radius_km"]:
-                            property_ids.append(property_id)
-                units = units.filter(property_id__in=property_ids)
-
-        from django.db.models import Case, IntegerField, When
-        units = units.annotate(
-            verified_rank=Case(
-                When(property__verification_status=Property.VerificationStatus.VERIFIED, then=0),
-                default=1,
-                output_field=IntegerField(),
-            )
-        )
-        ordering = params["ordering"]
-        requested_ordering = ordering
-        if ordering == "distance":
-            if connection.vendor == "postgresql":
-                from django.db.models import F, FloatField, Func, Value
-
-                class AsGeography(Func):
-                    template = "%(expressions)s::geography"
-
-                center = AsGeography(
-                    Func(
-                        Func(Value(float(params["longitude"])), Value(float(params["latitude"])), function="ST_MakePoint"),
-                        Value(4326),
-                        function="ST_SetSRID",
-                    )
-                )
-                units = units.annotate(
-                    distance=Func(F("property__location"), center, function="ST_Distance", output_field=FloatField())
-                ).distinct()
-            else:
-                from django.db.models import Case, FloatField, Value, When
-                from .fields import GeographicPoint
-
-                distance_cases = []
-                for property_id, point in Property.objects.exclude(location__isnull=True).values_list("id", "location"):
-                    if not isinstance(point, GeographicPoint):
-                        continue
-                    dlat = math.radians(point.latitude - params["latitude"])
-                    dlon = math.radians(point.longitude - params["longitude"])
-                    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(params["latitude"])) * math.cos(math.radians(point.latitude)) * math.sin(dlon / 2) ** 2
-                    distance_km = 6371 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-                    distance_cases.append(When(property_id=property_id, then=Value(distance_km)))
-                distance = Case(*distance_cases, default=Value(1e12), output_field=FloatField())
-                units = units.annotate(distance=distance).distinct()
-        else:
-            units = units.distinct()
-        sort_fields = ("distance", "id") if requested_ordering == "distance" else (ordering, "id")
-        if requested_ordering in ("-created_at", "distance"):
-            sort_fields = ("verified_rank",) + sort_fields
-        units = units.order_by(*sort_fields)
-        paginator = CursorPagination()
-        paginator.page_size = 20
-        paginator.ordering = sort_fields
+        units = apply_filters(_public_queryset(), params)
+        units, ordering = apply_ordering(units, params)
+        total = units.order_by().values("pk").distinct().count()
+        paginator = SearchPagination()
+        paginator.ordering = ordering
         page = paginator.paginate_queryset(units, request, view=self)
-        data = UnitSerializer(page, many=True).data
-        for item, unit in zip(data, page):
-            item["property"] = {
-                "area": unit.property.area, "city": unit.property.city,
-                "verification_status": unit.property.verification_status,
-            }
-            if unit.property.location:
-                # Approximate public map pins to protect the exact home entrance location.
-                item["property"]["latitude"] = round(unit.property.location.latitude, 3)
-                item["property"]["longitude"] = round(unit.property.location.longitude, 3)
-        response = paginator.get_paginated_response(data)
+        response = paginator.get_paginated_response(PublicUnitSerializer(page, many=True).data)
+        response.data["count"] = total
+        response.data["ordering"] = params["ordering"]
+        response.data["orderings"] = [{"value": key, "label": label} for key, label in ORDERINGS.items()]
         cache.set(cache_key, response.data, timeout=60)
         return response
+
+
+def record_listing_view(request, unit):
+    """Count one view per visitor per listing per 6 hours. Only a salted, expiring hash is kept, in cache."""
+    agent = request.META.get("HTTP_USER_AGENT", "")
+    if not agent or any(word in agent.lower() for word in ("bot", "crawler", "spider", "preview")):
+        return
+    if request.user.is_authenticated and (request.user.pk == unit.property.landlord.user_id or is_platform_admin(request.user)):
+        return
+    ident = ScopedRateThrottle().get_ident(request)
+    visitor = hashlib.sha256(f"{settings.SECRET_KEY}:{ident}:{agent}:{unit.pk}".encode()).hexdigest()[:32]
+    if not cache.add(f"listing-view:{visitor}", 1, timeout=6 * 3600):
+        return
+    stat, _ = UnitDailyStat.objects.get_or_create(unit=unit, date=timezone.localdate())
+    UnitDailyStat.objects.filter(pk=stat.pk).update(views=F("views") + 1)
 
 
 class PublicUnitDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        unit = get_object_or_404(
-            Unit.objects.select_related("property").prefetch_related("amenities", "media"),
-            slug=slug, is_published=True, available=True, property__is_active=True,
-            availability_confirmed_at__gte=timezone.now() - timedelta(days=30),
-        )
-        data = UnitSerializer(unit).data
-        data["property"] = {
-            "name": unit.property.name, "area": unit.property.area, "city": unit.property.city,
-            "county": unit.property.county, "country": unit.property.country,
-            "verification_status": unit.property.verification_status,
-        }
-        return Response(data)
+        return Response(PublicUnitSerializer(get_object_or_404(_public_queryset(), slug=slug)).data)
+
+
+class ListingViewBeaconView(APIView):
+    """POST /properties/listings/<slug>/view/ — the browser reports a real page view.
+
+    Counting happens here rather than on the detail GET, which the Next.js server
+    calls while rendering (and caches), so server renders and crawlers do not inflate views.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "public_search"
+
+    def post(self, request, slug):
+        unit = public_units().select_related("property__landlord").filter(slug=slug).first()
+        if unit:
+            record_listing_view(request, unit)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class MyPropertyListCreateView(APIView):
@@ -297,7 +256,7 @@ class MyPropertyListCreateView(APIView):
 
     def get(self, request):
         properties = Property.objects.select_related("landlord__user")
-        if request.user.role != User.Role.ADMIN:
+        if not is_platform_admin(request.user):
             properties = properties.filter(landlord__user=request.user)
         return Response(PropertySerializer(properties, many=True).data)
 
@@ -320,7 +279,14 @@ class PropertyDetailView(APIView):
         property = _owned_property(request, property_id)
         serializer = PropertySerializer(property, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        before = (property.address_line, property.area, property.city, property.county, property.location)
         property = serializer.save()
+        moved = before != (property.address_line, property.area, property.city, property.county, property.location)
+        if moved and property.verification_status == Property.VerificationStatus.VERIFIED and not is_platform_admin(request.user):
+            # A verification describes a specific place; moving it means re-checking it (no new fee).
+            property.verification_status = Property.VerificationStatus.NEEDS_REVIEW
+            property.save(update_fields=("verification_status", "updated_at"))
+            _audit(request, "property.verification_needs_review", property, reason="location_changed")
         _audit(request, "property.updated", property)
         _invalidate_public_listing_cache()
         return Response(PropertySerializer(property).data)
@@ -337,13 +303,18 @@ class UnitListCreateView(APIView):
         property = _owned_property(request, property_id)
         return Response(UnitSerializer(property.units.prefetch_related("amenities", "media"), many=True).data)
 
+    @transaction.atomic
     def post(self, request, property_id):
         property = _owned_property(request, property_id)
         serializer = UnitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        unit = serializer.save(property=property, availability_confirmed_at=timezone.now())
-        _audit(request, "unit.created", unit)
-        _invalidate_public_listing_cache()
+        initial = Unit.ModerationStatus.PENDING_REVIEW if settings.LISTINGS_REQUIRE_APPROVAL else Unit.ModerationStatus.APPROVED
+        unit = serializer.save(property=property, availability_confirmed_at=timezone.now(), moderation_status=initial)
+        duplicate = find_possible_duplicate(unit)
+        if duplicate:
+            _hold_for_review(unit, "This looks like another landlord's listing. Our team will check it before it goes live.", duplicate)
+        _audit(request, "unit.created", unit, moderation_status=unit.moderation_status, possible_duplicate=bool(duplicate))
+        transaction.on_commit(_invalidate_public_listing_cache)
         return Response(UnitSerializer(unit).data, status=status.HTTP_201_CREATED)
 
 
@@ -357,10 +328,15 @@ class UnitDetailView(APIView):
         unit = _owned_unit(request, unit_id)
         serializer = UnitSerializer(unit, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        if unit.moderation_hold and request.user.role != User.Role.ADMIN and serializer.validated_data.get("is_published"):
+        admin = is_platform_admin(request.user)
+        if unit.moderation_hold and not admin and serializer.validated_data.get("is_published"):
             return Response({"error": {"code": "under_review", "message": "This listing is under review and cannot be republished yet. Please contact support."}}, status=status.HTTP_403_FORBIDDEN)
         unit = serializer.save()
-        _audit(request, "unit.updated", unit)
+        if not admin and unit.moderation_status in (Unit.ModerationStatus.CHANGES_REQUESTED, Unit.ModerationStatus.REJECTED):
+            # Editing after moderator feedback resubmits the listing for review.
+            unit.moderation_status = Unit.ModerationStatus.PENDING_REVIEW
+            unit.save(update_fields=("moderation_status", "updated_at"))
+        _audit(request, "unit.updated", unit, fields=sorted(serializer.validated_data))
         _invalidate_public_listing_cache()
         return Response(UnitSerializer(unit).data)
 
@@ -370,21 +346,89 @@ class UnitDetailView(APIView):
 
 
 class UnitAvailabilityView(APIView):
+    """POST {"available": bool} — the landlord reconfirms availability, or marks the home occupied."""
+
     permission_classes = [IsLandlordOrAdmin]
 
     class AvailabilitySerializer(serializers.Serializer):
         available = serializers.BooleanField()
 
+    @transaction.atomic
     def post(self, request, unit_id):
         unit = _owned_unit(request, unit_id)
         serializer = self.AvailabilitySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        was_available = unit.available
         unit.available = serializer.validated_data["available"]
         unit.availability_confirmed_at = timezone.now()
         unit.save(update_fields=("available", "availability_confirmed_at", "updated_at"))
-        _audit(request, "unit.availability_confirmed", unit)
-        _invalidate_public_listing_cache()
+        _audit(request, "unit.availability_confirmed", unit, available=unit.available)
+        if was_available and not unit.available:
+            on_unit_unavailable(unit, request.user)
+        transaction.on_commit(_invalidate_public_listing_cache)
         return Response(UnitSerializer(unit).data)
+
+
+def on_unit_unavailable(unit, actor):
+    from apps.notifications.services import notify
+    from apps.referrals.services import on_unit_marked_occupied
+    from apps.viewings.models import ViewingRequest
+    from apps.viewings.services import cancel_request
+
+    # Pending requests can no longer lead anywhere: close them and return the tenants' credits.
+    for request_id in ViewingRequest.objects.filter(unit=unit, status=ViewingRequest.Status.PENDING).values_list("pk", flat=True):
+        cancel_request(request_id, unit.property.landlord.user, reason="The home is no longer available.")
+    for saved in SavedUnit.objects.filter(unit=unit).select_related("tenant__user"):
+        notify(recipient=saved.tenant.user, event="listing.unavailable", sms=False,
+               dedupe_key=f"saved:{saved.pk}:unavailable:{timezone.localdate():%Y%m%d}", title="A saved home is no longer available",
+               message=f"{unit.title} in {unit.property.area} is no longer available.", link="/saved")
+    on_unit_marked_occupied(unit, actor)
+
+
+class LandlordStatsView(APIView):
+    """GET /properties/mine/stats/ — listing performance for the signed-in landlord's own units."""
+
+    permission_classes = [IsLandlordOrAdmin]
+
+    def get(self, request):
+        from apps.viewings.models import Viewing, ViewingRequest
+
+        units = Unit.objects.filter(property__landlord__user=request.user)
+        today = timezone.localdate()
+        views = {row["unit_id"]: row for row in UnitDailyStat.objects.filter(unit__in=units, date__gte=today - timedelta(days=29))
+                 .values("unit_id").annotate(views_30d=Sum("views"), views_7d=Sum("views", filter=Q(date__gte=today - timedelta(days=6))))}
+        requests = {row["unit_id"]: row for row in ViewingRequest.objects.filter(unit__in=units).values("unit_id").annotate(
+            total=Count("id"),
+            pending=Count("id", filter=Q(status=ViewingRequest.Status.PENDING)),
+            approved=Count("id", filter=Q(status=ViewingRequest.Status.APPROVED)),
+            completed=Count("id", filter=Q(viewing__completed_at__isnull=False)),
+            rented=Count("id", filter=Q(viewing__status=Viewing.Status.RENTED)),
+        )}
+        saves = dict(SavedUnit.objects.filter(unit__in=units).values("unit_id").annotate(n=Count("id")).values_list("unit_id", "n"))
+        visible = set(public_units().filter(pk__in=units).values_list("pk", flat=True))
+        rows = []
+        for unit in units.select_related("property").order_by("property__name", "unit_number"):
+            v, r = views.get(unit.pk, {}), requests.get(unit.pk, {})
+            rows.append({
+                "unit_id": unit.pk, "title": unit.title, "property": unit.property.name,
+                "visible_in_search": unit.pk in visible, "moderation_status": unit.moderation_status,
+                "views_7d": v.get("views_7d") or 0, "views_30d": v.get("views_30d") or 0, "saves": saves.get(unit.pk, 0),
+                "requests": r.get("total", 0), "pending": r.get("pending", 0), "approved": r.get("approved", 0),
+                "completed": r.get("completed", 0), "rented": r.get("rented", 0),
+            })
+        totals = {key: sum(row[key] for row in rows) for key in ("views_7d", "views_30d", "saves", "requests", "pending", "approved", "completed", "rented")}
+        totals["request_rate"] = round(totals["requests"] / totals["views_30d"], 3) if totals["views_30d"] else None
+        return Response({"totals": totals, "units": rows})
+
+
+def _r2_client(**extra):
+    return boto3.client("s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL, aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, **extra)
+
+
+def _r2_configured():
+    return all((settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_STORAGE_BUCKET_NAME,
+                settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL))
 
 
 class MediaListCreateView(APIView):
@@ -401,17 +445,22 @@ class MediaListCreateView(APIView):
         asset_key = serializer.validated_data["asset_key"]
         if not asset_key.startswith(f"properties/{unit.id}/"):
             raise ValidationError({"asset_key": "This upload key does not belong to the unit."})
-        if not all((settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL)):
-            raise ValidationError("R2 storage is not configured.")
-        client = boto3.client("s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL, aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY)
+        if not _r2_configured():
+            raise ValidationError("Photo storage is not configured.")
+        if unit.media.count() >= 20:
+            raise ValidationError("A listing can have up to 20 photos.")
         try:
-            uploaded_object = client.head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key)
+            uploaded_object = _r2_client().head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key)
         except Exception:
             raise ValidationError({"asset_key": "The uploaded photo could not be verified. Upload it again."})
         if uploaded_object.get("ContentLength", 10 * 1024 * 1024 + 1) > 10 * 1024 * 1024 or uploaded_object.get("ContentType") not in ("image/jpeg", "image/png", "image/webp"):
             raise ValidationError({"asset_key": "The uploaded object is not an accepted image under 10 MB."})
-        media = serializer.save(unit=unit)
-        _audit(request, "property_media.created", media)
+        content_hash = str(uploaded_object.get("ETag", "")).strip('"')[:64]
+        media = serializer.save(unit=unit, content_hash=content_hash)
+        reused = bool(content_hash) and PropertyMedia.objects.filter(content_hash=content_hash).exclude(unit__property__landlord=unit.property.landlord).exists()
+        if reused and unit.moderation_status == Unit.ModerationStatus.APPROVED:
+            _hold_for_review(unit, "A photo on this listing also appears on another landlord's listing. Our team will check it.")
+        _audit(request, "property_media.created", media, reused_photo=reused)
         _invalidate_public_listing_cache()
         return Response(PropertyMediaSerializer(media).data, status=status.HTTP_201_CREATED)
 
@@ -437,17 +486,12 @@ class MediaPresignView(APIView):
         unit = _owned_unit(request, unit_id)
         serializer = PresignUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if not all((settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL)):
-            raise ValidationError("R2 storage is not configured.")
+        if not _r2_configured():
+            raise ValidationError("Photo storage is not configured.")
         extension = os.path.splitext(serializer.validated_data["filename"])[1].lower()
         asset_key = f"properties/{unit.id}/{uuid4().hex}{extension}"
-        client = boto3.client(
-            "s3", endpoint_url=settings.AWS_S3_ENDPOINT_URL,
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name="auto", config=Config(signature_version="s3v4"),
-        )
         content_type = serializer.validated_data["content_type"]
-        upload_url = client.generate_presigned_url(
+        upload_url = _r2_client(region_name="auto", config=Config(signature_version="s3v4")).generate_presigned_url(
             "put_object",
             Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": asset_key, "ContentType": content_type},
             ExpiresIn=300,

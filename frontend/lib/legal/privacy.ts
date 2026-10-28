@@ -42,6 +42,7 @@ export const privacy: LegalDoc = {
           "The same account data as above, and the properties and units you list: name, description, address, area, city, rent, deposit, bedrooms, amenities, availability, photos.",
           "Viewing requests received for your listings, your responses and outcomes you report.",
           "Success fees that become due and their payments (payer phone number, amount, M-Pesa receipt reference).",
+          "If you apply for landlord verification: your legal name, document type, only the last four characters of your ID or registration number, your relationship to the homes (owner, agent, caretaker or company), and the documents you upload. Documents are kept in private storage, seen only by our verification team (every access is logged), and deleted after the review — by default 90 days after the decision. The decision itself is kept with your account records.",
         ] },
         { sub: "Property data" },
         "Address, area and city; optional map coordinates you provide for a property; photos (the browser removes hidden photo metadata such as GPS tags before upload); price; amenities; availability and descriptions.",
@@ -49,6 +50,7 @@ export const privacy: LegalDoc = {
         { list: [
           "Your IP address and request timestamps, which our servers use for security and to limit abuse (for example rate limits). Web server and hosting logs may also record them.",
           "Browser and device information sent with normal web requests.",
+          "Listing view counts. To count a view once per visitor we use a short-lived, one-way scrambled value derived from your network address and browser; it is kept for a few hours and never stored with your account. Landlords see only totals.",
           "A sign-in session stored in your browser (see the Cookie Policy).",
         ] },
         { sub: "Reports, consent and account records" },
@@ -104,7 +106,7 @@ export const privacy: LegalDoc = {
         { list: [
           "Public listing pages show a home’s title, description, rent, photos, amenities, area and city, its verification label and an approximate map pin (rounded so it does not show the exact entrance). They do not show the landlord’s name or phone number.",
           "A landlord can see the viewing requests for their own homes, including the tenant’s optional message and preferred times. A tenant can see the landlord’s response, the scheduled time and meeting note for their own requests.",
-          "The Service does not display your phone number to the other party. Anything you type into a message or note can be read by the other party to that request, so avoid sharing details you do not need to.",
+          "Before a viewing is approved, neither side sees the other's phone number, and tenants do not see the street address. When a landlord approves a viewing, the tenant sees the address, the map location and the landlord's name and phone number, and the landlord sees the tenant's name (if added) and phone number, so the viewing can happen. Cancelled viewings stop showing these details. Anything you type into a message or note can be read by the other party to that request, so avoid sharing details you do not need to.",
         ] },
         { sub: "Private" },
         { list: [

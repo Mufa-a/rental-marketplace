@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.models import User
+from apps.core.permissions import is_platform_admin
 from .models import ReferralFee
 
 
@@ -14,7 +15,7 @@ class ReferralFeeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReferralFee
-        fields = ("id", "viewing_id", "unit_title", "amount", "status", "due_at", "created_at")
+        fields = ("id", "viewing_id", "unit_title", "amount", "currency", "monthly_rent", "source", "status", "due_at", "paid_at", "created_at")
 
 
 class MyReferralFeeListView(APIView):
@@ -24,6 +25,6 @@ class MyReferralFeeListView(APIView):
         fees = ReferralFee.objects.select_related("attribution__viewing__request__unit").order_by("-created_at")
         if request.user.role == User.Role.LANDLORD:
             fees = fees.filter(attribution__landlord__user=request.user)
-        elif request.user.role != User.Role.ADMIN:
+        elif not is_platform_admin(request.user):
             raise PermissionDenied("Only landlords can view referral fees.")
         return Response(ReferralFeeSerializer(fees, many=True).data)

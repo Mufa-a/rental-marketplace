@@ -197,3 +197,12 @@ class TestConsentAndAccountSafety:
         client.force_authenticate(second)
         assert client.get("/api/v1/auth/deletion-request/").data["request"] is None
         assert client.delete("/api/v1/auth/deletion-request/").status_code == 404
+
+
+@pytest.mark.django_db
+def test_otp_verification_is_throttled_per_phone_across_codes():
+    from rest_framework.test import APIClient as Client
+    client = Client()
+    payload = {"phone_number": "0712000999", "code": "000000"}
+    codes = [client.post("/api/v1/auth/otp/verify/", payload, format="json").status_code for _ in range(12)]
+    assert codes[:10] == [400] * 10 and codes[-1] == 429

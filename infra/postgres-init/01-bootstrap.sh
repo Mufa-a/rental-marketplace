@@ -11,8 +11,8 @@ SQL
 
 # The application schema uses PostGIS geography and GiST indexes.
 psql --username "$POSTGRES_USER" --dbname="$POSTGRES_DB" --set=ON_ERROR_STOP=1 \
-  --command='CREATE EXTENSION IF NOT EXISTS postgis;'
+  --command='CREATE EXTENSION IF NOT EXISTS postgis;' --command='CREATE EXTENSION IF NOT EXISTS pg_trgm;'
 
 # New test databases are cloned from template1, so install PostGIS there too.
 psql --username "$POSTGRES_USER" --dbname=template1 --set=ON_ERROR_STOP=1 \
-  --command='CREATE EXTENSION IF NOT EXISTS postgis;'
+  --command='CREATE EXTENSION IF NOT EXISTS postgis;' --command='CREATE EXTENSION IF NOT EXISTS pg_trgm;'

@@ -1,0 +1,87 @@
+# Production stack. Usage (see docs/DEPLOYMENT.md):
+#   cp infra/production.env.example infra/production.env   # then fill it in
+#   docker compose -f docker-compose.prod.yml --env-file infra/production.env build
+#   docker compose -f docker-compose.prod.yml --env-file infra/production.env run --rm backend python manage.py migrate
+#   docker compose -f docker-compose.prod.yml --env-file infra/production.env up -d
+name: nyumbani
+
+x-backend: &backend
+  build: ./backend
+  image: nyumbani-backend:${RELEASE:-latest}
+  env_file: infra/production.env
+  restart: unless-stopped
+  depends_on:
+    db: { condition: service_healthy }
+    redis: { condition: service_started }
+  volumes:
+    - private_media:/app/private_media
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rental_marketplace
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      APP_DB_USER: rental
+      APP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rental_marketplace"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  backend:
+    <<: *backend
+
+  # Payment reconciliation, request expiry, reminders and SMS/email delivery every 10 minutes,
+  # plus daily verification-document purging and audit-chain verification.
+  scheduler:
+    <<: *backend
+    healthcheck: { disable: true }
+    command: >
+      sh -c 'i=0; while true; do
+        python manage.py run_notifications;
+        if [ $$((i % 144)) -eq 0 ]; then python manage.py purge_verification_documents; python manage.py verify_audit_chain; fi;
+        i=$$((i + 1)); sleep 600; done'
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}/api/v1
+        NEXT_PUBLIC_SITE_URL: ${PUBLIC_ORIGIN}
+        NEXT_PUBLIC_REFERRAL_WINDOW_DAYS: ${REFERRAL_ATTRIBUTION_DAYS:-60}
+    image: nyumbani-frontend:${RELEASE:-latest}
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://backend:8000/api/v1
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+    depends_on: [backend]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      DJANGO_ADMIN_PATH: ${DJANGO_ADMIN_PATH:-admin}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [frontend, backend]
+
+volumes:
+  pgdata:
+  private_media:
+  caddy_data:
+  caddy_config:

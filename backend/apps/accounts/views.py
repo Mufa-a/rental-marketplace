@@ -15,7 +15,7 @@ from . import services
 from apps.core.models import AuditLog
 from .models import AccountDeletionRequest, ConsentRecord, User
 from .serializers import ConsentSerializer, DeletionRequestSerializer, OTPRequestSerializer, OTPVerifySerializer, ProfileSerializer
-from .throttles import PhoneOTPThrottle
+from .throttles import IPOTPThrottle, PhoneOTPThrottle, PhoneOTPVerifyThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class OTPRequestView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [PhoneOTPThrottle]
+    throttle_classes = [PhoneOTPThrottle, IPOTPThrottle]
 
     def post(self, request):
         serializer = OTPRequestSerializer(data=request.data)
@@ -101,6 +101,7 @@ class OTPVerifyView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [PhoneOTPVerifyThrottle]
 
     def post(self, request):
         serializer = OTPVerifySerializer(data=request.data)

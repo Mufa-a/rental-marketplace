@@ -67,6 +67,8 @@ export const LEGAL_PAGES = [
   { href: "/privacy", label: "Privacy Policy" },
   { href: "/cookies", label: "Cookie Policy" },
   { href: "/data-protection", label: "Data Protection" },
+  { href: "/viewing-packages", label: "Packages, Fees & Refunds" },
+  { href: "/listing-rules", label: "Listing Rules" },
   { href: "/copyright", label: "Copyright" },
   { href: "/contact", label: "Contact" },
 ] as const;
