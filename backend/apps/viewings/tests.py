@@ -163,3 +163,220 @@ class TestViewingAccessControlAndAudit:
         assert client.post(f"/api/v1/viewings/requests/{request_id}/approve/", payload, format="json").status_code == 201
         assert client.post(f"/api/v1/viewings/requests/{request_id}/approve/", payload, format="json").status_code == 400
         assert Viewing.objects.filter(request_id=request_id).count() == 1
+
+
+def _approve(client, landlord_user, request_id, hours=2):
+    client.force_authenticate(landlord_user)
+    response = client.post(f"/api/v1/viewings/requests/{request_id}/approve/",
+                           {"scheduled_at": (timezone.now() + timedelta(hours=hours)).isoformat(), "meeting_note": "Gate B"}, format="json")
+    assert response.status_code == 201, response.data
+    return Viewing.objects.get(request_id=request_id)
+
+
+def _past(viewing, days=1):
+    Viewing.objects.filter(pk=viewing.pk).update(scheduled_at=timezone.now() - timedelta(days=days))
+    viewing.refresh_from_db()
+    return viewing
+
+
+@pytest.mark.django_db
+class TestBookingWorkflow:
+    def _request(self, client, unit):
+        response = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json")
+        assert response.status_code == 201, response.data
+        return response.data["id"]
+
+    def test_duplicate_request_for_the_same_home_is_refused_without_spending_a_credit(self):
+        """Regression: each duplicate request used to reserve another paid credit."""
+        tenant_user, tenant, _, unit = marketplace("dup")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        self._request(client, unit)
+        second = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json")
+        assert second.status_code == 409 and second.data["error"]["code"] == "duplicate_request"
+        assert ViewingCreditPurchase.objects.get(tenant=tenant).credits_remaining == 2
+
+    def test_dashboard_reads_are_not_rate_limited(self):
+        """Regression: the 20/hour request-creation limit also applied to GET, emptying dashboards."""
+        _, _, landlord_user, _ = marketplace("rl")
+        client = APIClient(); client.force_authenticate(landlord_user)
+        assert {client.get("/api/v1/viewings/requests/").status_code for _ in range(25)} == {200}
+
+    def test_validation_messages_reach_the_client(self):
+        tenant_user, _, _, unit = marketplace("vm")
+        unit.available = False; unit.save()
+        client = APIClient(); client.force_authenticate(tenant_user)
+        response = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json")
+        assert response.status_code == 400
+        assert "not open for viewings" in response.data["error"]["message"]
+
+    def test_unmoderated_or_held_homes_cannot_be_requested(self):
+        tenant_user, _, _, unit = marketplace("mod")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        unit.moderation_status = "pending_review"; unit.save()
+        assert client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").status_code == 400
+        unit.moderation_status = "approved"; unit.moderation_hold = True; unit.save()
+        assert client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").status_code == 400
+
+    def test_contact_details_are_released_only_after_approval_and_only_to_the_parties(self):
+        tenant_user, _, landlord_user, unit = marketplace("ct")
+        landlord_user.first_name = "Wanjiru"; landlord_user.save()
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        assert client.get(f"/api/v1/viewings/requests/{request_id}/").data["contact"] is None
+        client.force_authenticate(landlord_user)
+        assert client.get(f"/api/v1/viewings/requests/{request_id}/").data["contact"] is None
+
+        _approve(client, landlord_user, request_id)
+        client.force_authenticate(tenant_user)
+        contact = client.get(f"/api/v1/viewings/requests/{request_id}/").data["contact"]
+        assert contact["address"] == "1 Test" and contact["phone"] == landlord_user.phone_number
+        assert contact["name"] == "Wanjiru" and contact["meeting_note"] == "Gate B"
+        client.force_authenticate(landlord_user)
+        assert client.get(f"/api/v1/viewings/requests/{request_id}/").data["contact"]["phone"] == tenant_user.phone_number
+
+        outsider, _, _, _ = marketplace("ct2")
+        client.force_authenticate(outsider)
+        assert client.get(f"/api/v1/viewings/requests/{request_id}/").status_code == 404
+        # Public listing never exposes the street address.
+        assert "address_line" not in str(APIClient().get(f"/api/v1/properties/listings/{unit.slug}/").data)
+
+    def test_landlord_cancelling_an_approved_viewing_returns_the_consumed_credit(self):
+        tenant_user, tenant, landlord_user, unit = marketplace("lc")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        _approve(client, landlord_user, request_id)
+        assert ViewingCreditPurchase.objects.get(tenant=tenant).credits_remaining == 2
+        response = client.post(f"/api/v1/viewings/requests/{request_id}/cancel/", {"reason": "Plumbing repairs"}, format="json")
+        assert response.status_code == 200 and response.data["cancelled_by"] == "landlord"
+        assert ViewingCreditPurchase.objects.get(tenant=tenant).credits_remaining == 3
+        assert tenant_user.notifications.filter(event="viewing.cancelled", channel="in_app").exists()
+
+    def test_tenant_cancelling_an_approved_viewing_uses_the_credit(self):
+        tenant_user, tenant, landlord_user, unit = marketplace("tc")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        _approve(client, landlord_user, request_id)
+        client.force_authenticate(tenant_user)
+        assert client.post(f"/api/v1/viewings/requests/{request_id}/cancel/", {}, format="json").status_code == 200
+        assert ViewingCreditPurchase.objects.get(tenant=tenant).credits_remaining == 2
+
+    def test_reschedule_is_limited_and_notifies_the_tenant(self):
+        tenant_user, _, landlord_user, unit = marketplace("rs")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        viewing = _approve(client, landlord_user, request_id)
+        for _ in range(3):
+            when = (timezone.now() + timedelta(days=2)).isoformat()
+            assert client.post(f"/api/v1/viewings/{viewing.id}/reschedule/", {"scheduled_at": when}, format="json").status_code == 200
+        assert client.post(f"/api/v1/viewings/{viewing.id}/reschedule/", {"scheduled_at": when}, format="json").status_code == 400
+        assert tenant_user.notifications.filter(event="viewing.rescheduled", channel="in_app").count() == 3
+        client.force_authenticate(tenant_user)
+        assert client.post(f"/api/v1/viewings/{viewing.id}/reschedule/", {"scheduled_at": when}, format="json").status_code == 403
+
+    def test_viewings_cannot_be_scheduled_far_ahead_or_completed_early(self):
+        tenant_user, _, landlord_user, unit = marketplace("fa")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        client.force_authenticate(landlord_user)
+        far = (timezone.now() + timedelta(days=90)).isoformat()
+        assert client.post(f"/api/v1/viewings/requests/{request_id}/approve/", {"scheduled_at": far}, format="json").status_code == 400
+        viewing = _approve(client, landlord_user, request_id, hours=48)
+        assert client.post(f"/api/v1/viewings/{viewing.id}/complete/", {}, format="json").status_code == 400
+
+    def test_timeline_records_each_step_by_role(self):
+        tenant_user, _, landlord_user, unit = marketplace("tl")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = self._request(client, unit)
+        viewing = _past(_approve(client, landlord_user, request_id))
+        client.force_authenticate(tenant_user)
+        client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "did_not_rent"}, format="json")
+        events = client.get(f"/api/v1/viewings/requests/{request_id}/").data["timeline"]
+        assert [(e["action"], e["by"]) for e in events] == [
+            ("viewing_request.created", "tenant"), ("viewing.scheduled", "landlord"), ("viewing.outcome_reported", "tenant")]
+
+
+@pytest.mark.django_db
+class TestReferralProtection:
+    def _viewed(self, suffix):
+        tenant_user, tenant, landlord_user, unit = marketplace(suffix)
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").data["id"]
+        viewing = _past(_approve(client, landlord_user, request_id))
+        return client, tenant_user, landlord_user, unit, viewing
+
+    def test_tenant_rental_report_asks_the_landlord_to_confirm(self):
+        from apps.referrals.models import ReferralFee, ReferralFlag
+        client, tenant_user, landlord_user, unit, viewing = self._viewed("tr")
+        client.force_authenticate(tenant_user)
+        assert client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json").status_code == 201
+        assert ReferralFlag.objects.filter(viewing=viewing, reason="tenant_reported_rented", status="open").exists()
+        assert landlord_user.notifications.filter(event="referral.confirm_requested").exists()
+        assert not ReferralFee.objects.exists()
+
+    def test_conflicting_reports_open_a_dispute_and_a_flag(self):
+        from apps.referrals.models import ReferralFlag
+        from apps.trust.models import Dispute
+        client, tenant_user, landlord_user, unit, viewing = self._viewed("cf")
+        client.force_authenticate(tenant_user)
+        client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json")
+        client.force_authenticate(landlord_user)
+        client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "did_not_rent"}, format="json")
+        viewing.refresh_from_db()
+        assert viewing.status == Viewing.Status.DISPUTED
+        assert Dispute.objects.filter(viewing=viewing).exists()
+        assert ReferralFlag.objects.filter(viewing=viewing, reason="outcome_conflict").exists()
+
+    def test_landlord_rental_report_creates_one_fee_and_takes_the_unit_off_the_market(self, monkeypatch):
+        from apps.referrals import services as referral_services
+        from apps.referrals.models import ReferralFee
+        monkeypatch.setattr(referral_services, "request_fee_payment", lambda fee, actor: None)
+        client, _, landlord_user, unit, viewing = self._viewed("lr")
+        client.force_authenticate(landlord_user)
+        response = client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json")
+        assert response.status_code == 201
+        assert response.data["fee"]["amount"] == 1500  # rent 12,000 falls in the lowest seeded band
+        assert client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json").status_code == 400
+        unit.refresh_from_db()
+        assert ReferralFee.objects.count() == 1 and not unit.available and not unit.is_published
+        assert APIClient().get(f"/api/v1/properties/listings/{unit.slug}/").status_code == 404
+
+    def test_marking_a_unit_occupied_after_a_viewing_asks_the_tenant(self):
+        from apps.referrals.models import ReferralFlag
+        client, tenant_user, landlord_user, unit, viewing = self._viewed("oc")
+        client.force_authenticate(landlord_user)
+        assert client.post(f"/api/v1/properties/units/{unit.id}/availability/", {"available": False}, format="json").status_code == 200
+        assert ReferralFlag.objects.filter(viewing=viewing, reason="occupied_after_viewing", status="open").count() == 1
+        assert tenant_user.notifications.filter(event="referral.confirm_requested", channel="in_app").exists()
+        # Toggling again does not spam the tenant or duplicate the flag.
+        client.post(f"/api/v1/properties/units/{unit.id}/availability/", {"available": True}, format="json")
+        client.post(f"/api/v1/properties/units/{unit.id}/availability/", {"available": False}, format="json")
+        assert ReferralFlag.objects.filter(viewing=viewing, reason="occupied_after_viewing").count() == 1
+
+    def test_a_late_rental_report_is_accepted_inside_the_attribution_window(self):
+        client, tenant_user, landlord_user, unit, viewing = self._viewed("late")
+        for user in (tenant_user, landlord_user):
+            client.force_authenticate(user)
+            client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "did_not_rent"}, format="json")
+        viewing.refresh_from_db()
+        assert viewing.status == Viewing.Status.DID_NOT_RENT
+        client.force_authenticate(tenant_user)
+        assert client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json").status_code == 200
+        viewing.refresh_from_db()
+        assert viewing.status == Viewing.Status.DISPUTED
+
+    def test_admin_ruling_creates_the_fee_and_resolves_the_dispute(self):
+        from apps.referrals.models import ReferralFee, ReferralFlag
+        from apps.referrals.services import resolve_flag_or_dispute
+        from apps.trust.models import Dispute
+        client, tenant_user, landlord_user, unit, viewing = self._viewed("ar")
+        client.force_authenticate(tenant_user)
+        client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "rented"}, format="json")
+        client.force_authenticate(landlord_user)
+        client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "did_not_rent"}, format="json")
+        admin = User.objects.create_superuser(phone_number="+254700000777", password="x-secure-password")
+        fee = resolve_flag_or_dispute(viewing, admin=admin, rented=True, note="Tenant showed signed lease")
+        viewing.refresh_from_db()
+        assert viewing.status == Viewing.Status.RENTED and fee.source == ReferralFee.Source.ADMIN_RULING
+        assert Dispute.objects.get(viewing=viewing).status == Dispute.Status.RESOLVED
+        assert not ReferralFlag.objects.filter(viewing=viewing, status="open").exists()
+        assert AuditLog.objects.filter(action="referral.ruling", actor=admin).exists()

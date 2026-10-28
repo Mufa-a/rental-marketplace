@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import User
 from apps.core.models import AuditLog
+from apps.core.permissions import is_platform_admin
 from apps.payments.models import Payment
 from apps.properties.models import Property, Unit
 from apps.referrals.models import ReferralFee
@@ -45,7 +46,7 @@ def mask_phone(phone):
 
 
 def _require_admin(request):
-    if request.user.role != User.Role.ADMIN or not request.user.is_staff:
+    if not is_platform_admin(request.user):
         return Response({"error": {"code": "admin_only", "message": "Admin access is required."}}, status=403)
     return None
 

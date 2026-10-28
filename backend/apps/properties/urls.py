@@ -1,14 +1,21 @@
 from django.urls import path
 
-from .views import AmenityListView, MediaDetailView, MediaListCreateView, MediaPresignView, MyPropertyListCreateView, PropertyDetailView, PublicUnitDetailView, PublicUnitSearchView, SavedUnitDetailView, SavedUnitListCreateView, UnitAvailabilityView, UnitDetailView, UnitListCreateView
+from .views import (
+    AmenityListView, LandlordStatsView, ListingViewBeaconView, LocationSuggestView, MediaDetailView, MediaListCreateView,
+    MediaPresignView, MyPropertyListCreateView, PropertyDetailView, PublicUnitDetailView, PublicUnitSearchView,
+    SavedUnitDetailView, SavedUnitListCreateView, UnitAvailabilityView, UnitDetailView, UnitListCreateView,
+)
 
 urlpatterns = [
     path("amenities/", AmenityListView.as_view(), name="amenity-list"),
+    path("locations/", LocationSuggestView.as_view(), name="location-suggest"),
     path("saved/", SavedUnitListCreateView.as_view(), name="saved-unit-list-create"),
     path("saved/<int:unit_id>/", SavedUnitDetailView.as_view(), name="saved-unit-detail"),
     path("search/", PublicUnitSearchView.as_view(), name="public-unit-search"),
     path("listings/<slug:slug>/", PublicUnitDetailView.as_view(), name="public-unit-detail"),
+    path("listings/<slug:slug>/view/", ListingViewBeaconView.as_view(), name="public-unit-view"),
     path("mine/", MyPropertyListCreateView.as_view(), name="property-list-create"),
+    path("mine/stats/", LandlordStatsView.as_view(), name="landlord-stats"),
     path("<int:property_id>/", PropertyDetailView.as_view(), name="property-detail"),
     path("<int:property_id>/units/", UnitListCreateView.as_view(), name="unit-list-create"),
     path("units/<int:unit_id>/", UnitDetailView.as_view(), name="unit-detail"),

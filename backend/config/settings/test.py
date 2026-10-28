@@ -20,3 +20,7 @@ CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]  # fast, tests only
+
+# Payments in tests go through mocked providers; never the network.
+PAYMENT_PROVIDER = "mpesa"
+MPESA_CONFIRM_CALLBACKS = True
