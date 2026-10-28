@@ -24,3 +24,8 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]  # fast, te
 # Payments in tests go through mocked providers; never the network.
 PAYMENT_PROVIDER = "mpesa"
 MPESA_CONFIRM_CALLBACKS = True
+
+import tempfile  # noqa: E402
+
+PRIVATE_MEDIA_ROOT = tempfile.mkdtemp(prefix="nyumbani-private-")
+R2_PRIVATE_BUCKET_NAME = ""

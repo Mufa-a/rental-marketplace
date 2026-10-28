@@ -7,6 +7,8 @@ venv/
 
 # Django
 backend/.env
+backend/private_media/
+backend/staticfiles/
 *.sqlite3
 
 # Node

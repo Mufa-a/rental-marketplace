@@ -14,6 +14,10 @@ if MPESA_ENV not in ("sandbox", "production"):
 if MPESA_CALLBACK_TOKEN and len(MPESA_CALLBACK_TOKEN) < 32:
     raise RuntimeError("MPESA_CALLBACK_TOKEN must be a long random secret (at least 32 characters).")
 
+if not R2_PRIVATE_BUCKET_NAME and not env.bool("ALLOW_LOCAL_PRIVATE_MEDIA", default=False):
+    raise RuntimeError("Set R2_PRIVATE_BUCKET_NAME (a private bucket) for verification documents, "
+                       "or ALLOW_LOCAL_PRIVATE_MEDIA=True with an encrypted, backed-up PRIVATE_MEDIA_ROOT volume.")
+
 DEBUG = False
 
 # ---- HTTPS / cookies / headers ----

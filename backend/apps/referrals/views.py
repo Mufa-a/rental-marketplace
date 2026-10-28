@@ -15,7 +15,7 @@ class ReferralFeeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReferralFee
-        fields = ("id", "viewing_id", "unit_title", "amount", "status", "due_at", "created_at")
+        fields = ("id", "viewing_id", "unit_title", "amount", "currency", "monthly_rent", "source", "status", "due_at", "paid_at", "created_at")
 
 
 class MyReferralFeeListView(APIView):

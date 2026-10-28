@@ -147,6 +147,24 @@ def _focus_items():
             "action_label": "View disputes",
         })
 
+    from apps.referrals.models import ReferralFlag
+    from apps.verification.models import LandlordVerification
+
+    extra_queues = (
+        ("listings_awaiting_review", "Listings awaiting moderation", Unit.objects.filter(moderation_status=Unit.ModerationStatus.PENDING_REVIEW),
+         "high", "Review listings", "New, edited or possibly duplicated listings are hidden until reviewed."),
+        ("landlord_verifications", "Landlord verifications to review", LandlordVerification.objects.filter(status=LandlordVerification.Status.PENDING),
+         "medium", "Review verifications", "Identity documents waiting for a decision."),
+        ("referral_reviews", "Possible unreported rentals", ReferralFlag.objects.filter(status=ReferralFlag.Status.OPEN),
+         "high", "Review referrals", "A tenant reported renting, a unit was let soon after a viewing, or outcomes conflict."),
+        ("payments_needing_review", "Payments needing a manual check", Payment.objects.filter(status=Payment.Status.DISPUTED),
+         "high", "Review payments", "Amount mismatch, reused receipt or a callback the provider did not confirm."),
+    )
+    for key, label, queryset, severity, action_label, detail in extra_queues:
+        count = queryset.count()
+        if count:
+            items.append({"key": key, "label": label, "count": count, "detail": detail, "severity": severity, "action_label": action_label})
+
     order = {"high": 0, "medium": 1, "low": 2}
     items.sort(key=lambda item: order[item["severity"]])
     return items

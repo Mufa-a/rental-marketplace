@@ -170,6 +170,13 @@ AWS_STORAGE_BUCKET_NAME = env("R2_BUCKET_NAME", default="")
 AWS_S3_ENDPOINT_URL = env("R2_ENDPOINT_URL", default="")
 AWS_S3_ADDRESSING_STYLE = "virtual"
 R2_PUBLIC_BASE_URL = env("R2_PUBLIC_BASE_URL", default="").rstrip("/")
+# Landlord verification documents: a separate PRIVATE bucket (no public URL, short presigned reads).
+# When unset (development), documents go to PRIVATE_MEDIA_ROOT, which is never served over HTTP.
+R2_PRIVATE_BUCKET_NAME = env("R2_PRIVATE_BUCKET_NAME", default="")
+PRIVATE_MEDIA_ROOT = env("PRIVATE_MEDIA_ROOT", default=str(BASE_DIR / "private_media"))
+VERIFICATION_DOCUMENT_RETENTION_DAYS = env.int("VERIFICATION_DOCUMENT_RETENTION_DAYS", default=90)
+# Upload limits (bytes). Keep the reverse proxy's client_max_body_size above 4 x this.
+VERIFICATION_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024
 
 # ---- Third-party service credentials (used from Phase 2/5/6 onward) ----
 AFRICASTALKING_USERNAME = env("AFRICASTALKING_USERNAME", default="")
