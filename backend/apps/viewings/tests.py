@@ -380,3 +380,16 @@ class TestReferralProtection:
         assert Dispute.objects.get(viewing=viewing).status == Dispute.Status.RESOLVED
         assert not ReferralFlag.objects.filter(viewing=viewing, status="open").exists()
         assert AuditLog.objects.filter(action="referral.ruling", actor=admin).exists()
+
+
+@pytest.mark.django_db
+def test_a_viewing_that_has_happened_cannot_be_cancelled_or_moved_to_dodge_attribution():
+    tenant_user, tenant, landlord_user, unit = marketplace("dodge")
+    client = APIClient(); client.force_authenticate(tenant_user)
+    request_id = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").data["id"]
+    viewing = _past(_approve(client, landlord_user, request_id), days=0.1)
+    client.force_authenticate(landlord_user)
+    assert client.post(f"/api/v1/viewings/requests/{request_id}/cancel/", {}, format="json").status_code == 400
+    future = (timezone.now() + timedelta(days=1)).isoformat()
+    assert client.post(f"/api/v1/viewings/{viewing.id}/reschedule/", {"scheduled_at": future}, format="json").status_code == 400
+    assert client.post(f"/api/v1/viewings/{viewing.id}/outcome/", {"choice": "no_show"}, format="json").status_code == 201

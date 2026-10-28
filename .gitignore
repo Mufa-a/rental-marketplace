@@ -32,3 +32,4 @@ frontend/.env.local
 pytest-cache-files-*/
 .vscode/
 *.tsbuildinfo
+dump.rdb

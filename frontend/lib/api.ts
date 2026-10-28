@@ -64,3 +64,15 @@ export async function signOut() {
   clearSession();
   window.location.assign("/");
 }
+
+/** Download an authenticated file (e.g. an admin CSV export) without putting the token in a URL. */
+export async function downloadFile(path: string, filename: string) {
+  const send = (access: string | null) => fetch(`${API_BASE_URL}${path}`, { headers: access ? { Authorization: `Bearer ${access}` } : {} });
+  let response = await send(token("rental_access"));
+  if (response.status === 401) response = await send(await refreshAccessToken());
+  if (!response.ok) throw new Error("The export could not be downloaded.");
+  const url = URL.createObjectURL(await response.blob());
+  const link = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

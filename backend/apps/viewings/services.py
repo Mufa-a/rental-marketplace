@@ -112,8 +112,10 @@ def cancel_request(request_id, user, *, reason=""):
     if item.status not in ViewingRequest.ACTIVE_STATUSES:
         raise ValidationError("This request is no longer open.")
     viewing = getattr(item, "viewing", None)
-    if viewing and viewing.status != Viewing.Status.SCHEDULED:
-        raise ValidationError("This viewing has already taken place; report the outcome instead.")
+    if viewing and (viewing.status != Viewing.Status.SCHEDULED or viewing.scheduled_at <= timezone.now()):
+        # After the agreed time a viewing is resolved by outcome reports (including "no show"), never by
+        # cancelling — otherwise a completed viewing could be erased from the referral record.
+        raise ValidationError("This viewing time has passed. Report what happened instead (you can choose 'no show').")
     previous = item.status
     item.status = ViewingRequest.Status.CANCELLED
     item.cancelled_by = party
@@ -199,8 +201,8 @@ def reschedule_viewing(viewing_id, user, *, scheduled_at, meeting_note=None):
     viewing = _lock_viewing(viewing_id)
     if not is_landlord_for(user, viewing.request) and not is_platform_admin(user):
         raise PermissionDenied("Only the landlord can move a viewing. Tenants can cancel and request again.")
-    if viewing.status != Viewing.Status.SCHEDULED:
-        raise ValidationError("Only upcoming viewings can be rescheduled.")
+    if viewing.status != Viewing.Status.SCHEDULED or viewing.scheduled_at <= timezone.now():
+        raise ValidationError("Only upcoming viewings can be rescheduled. Report the outcome of a viewing that has passed.")
     if viewing.reschedule_count >= MAX_RESCHEDULES:
         raise ValidationError("This viewing has been moved too many times. Cancel it instead; the tenant's credit will be returned.")
     _validate_time(scheduled_at)

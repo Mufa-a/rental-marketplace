@@ -3,6 +3,7 @@ import { Fraunces, Manrope } from "next/font/google";
 import SiteFooter from "@/components/SiteFooter";
 import ThemeToggle from "@/components/ThemeToggle";
 import "../styles/globals.css";
+import "../styles/app.css";
 
 // Self-hosted at build time: no request to Google from visitors' browsers.
 const display = Fraunces({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-display", display: "swap" });

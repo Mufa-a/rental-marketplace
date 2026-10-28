@@ -1,33 +1,35 @@
 import type { MetadataRoute } from "next";
+import { slug } from "@/lib/search";
+import { SERVER_API } from "@/lib/server-api";
+import type { SearchPage } from "@/lib/types";
 
-type Listing = { slug?: string; property?: { city?: string; area?: string } };
-type SearchPage = { next?: string | null; results?: Listing[] };
+export const revalidate = 3600;
 
+/** Public pages only. Dashboards, accounts and anything about tenants or bookings are never listed. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
   const entries: MetadataRoute.Sitemap = [
     { url: site, changeFrequency: "daily", priority: 1 },
-    ...["terms", "privacy", "cookies", "data-protection", "copyright", "contact"].map((page) => ({ url: `${site}/${page}`, changeFrequency: "yearly" as const, priority: 0.3 })),
+    ...["viewing-packages", "listing-rules", "terms", "privacy", "cookies", "data-protection", "copyright", "contact"]
+      .map((page) => ({ url: `${site}/${page}`, changeFrequency: "monthly" as const, priority: 0.3 })),
   ];
-  let next: string | null = `${api}/properties/search/`;
-  let pages = 0;
-  while (next && pages < 20) {
+  const places = new Set<string>();
+  let cursor: string | null = "";
+  for (let pages = 0; cursor !== null && pages < 50; pages += 1) {
     try {
-      const response = await fetch(next, { next: { revalidate: 3600 } });
+      const response = await fetch(`${SERVER_API}/properties/search/?ordering=-created_at${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { next: { revalidate: 3600 } });
       if (!response.ok) break;
       const body = (await response.json()) as SearchPage;
-      for (const listing of body.results ?? []) {
-        if (!listing.slug || !listing.property?.city || !listing.property?.area) continue;
-        const path = ["listings", listing.property.city, listing.property.area, listing.slug]
-          .map((part) => encodeURIComponent(part.toLowerCase().replaceAll(" ", "-"))).join("/");
-        entries.push({ url: `${site}/${path}`, changeFrequency: "weekly", priority: 0.7 });
+      for (const listing of body.results) {
+        entries.push({ url: `${site}${listing.path}`, lastModified: listing.updated_at, changeFrequency: "weekly", priority: 0.7 });
+        const p = listing.property;
+        places.add(`/rentals/${slug(p.county)}`);
+        places.add(`/rentals/${slug(p.county)}/${slug(p.city)}`);
+        places.add(`/rentals/${slug(p.county)}/${slug(p.city)}/${slug(p.area)}`);
       }
-      next = body.next ?? null;
-      pages += 1;
-    } catch {
-      break;
-    }
+      cursor = body.next ? new URL(body.next).searchParams.get("cursor") : null;
+    } catch { break; }
   }
+  for (const place of places) entries.push({ url: `${site}${place}`, changeFrequency: "daily", priority: 0.6 });
   return entries;
 }

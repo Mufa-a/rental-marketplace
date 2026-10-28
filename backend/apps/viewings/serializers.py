@@ -21,6 +21,7 @@ class RequestSerializer(serializers.ModelSerializer):
     viewing = serializers.SerializerMethodField()
     unit_title = serializers.CharField(source="unit.title", read_only=True)
     unit_slug = serializers.CharField(source="unit.slug", read_only=True)
+    unit_path = serializers.SerializerMethodField()
     property_name = serializers.CharField(source="unit.property.name", read_only=True)
     area = serializers.CharField(source="unit.property.area", read_only=True)
     city = serializers.CharField(source="unit.property.city", read_only=True)
@@ -32,7 +33,7 @@ class RequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ViewingRequest
-        fields = ("id", "unit", "unit_title", "unit_slug", "property_name", "area", "city", "monthly_rent", "unit_available",
+        fields = ("id", "unit", "unit_title", "unit_slug", "unit_path", "property_name", "area", "city", "monthly_rent", "unit_available",
                   "preferred_times", "note", "status", "landlord_note", "responded_at", "cancelled_by", "cancel_reason",
                   "viewing", "my_role", "my_outcome", "contact", "created_at", "updated_at")
         read_only_fields = ("id", "status", "landlord_note", "responded_at", "cancelled_by", "cancel_reason", "viewing", "created_at", "updated_at")
@@ -41,6 +42,10 @@ class RequestSerializer(serializers.ModelSerializer):
         if not isinstance(value, list) or len(value) > 5 or any(not isinstance(item, str) or len(item) > 60 for item in value):
             raise serializers.ValidationError("Give up to five short preferred times.")
         return value
+
+    def get_unit_path(self, obj):
+        from apps.properties.search import listing_path
+        return listing_path(obj.unit)
 
     def _user(self):
         request = self.context.get("request")

@@ -1,21 +1,21 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import AccountNav from "./AccountNav";
 
 /**
- * One shared header instead of every page hand-rolling its own <header
- * className="topnav">. Keeps the brand mark, spacing, and link styling
- * identical everywhere it's used.
+ * One shared header. By default the right-hand side shows account-aware navigation;
+ * pass `right` to replace it or `extra` to add page-specific links.
  */
-export default function SiteHeader({ eyebrow, right }: { eyebrow?: string; right: ReactNode }) {
+export default function SiteHeader({ eyebrow, right, extra }: { eyebrow?: string; right?: ReactNode; extra?: ReactNode }) {
   return (
     <header className="site-header">
       <Link className="brand-mark" href="/">
         <span className="dot" aria-hidden="true" />
         Nyumbani
       </Link>
-      <nav className="nav-actions">
+      <nav className="nav-actions" aria-label="Account">
         {eyebrow && <span className="eyebrow">{eyebrow}</span>}
-        {right}
+        {right ?? <AccountNav extra={extra} />}
       </nav>
     </header>
   );

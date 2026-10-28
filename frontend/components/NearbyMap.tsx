@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-type MapUnit = { id: number; slug: string; title: string; monthly_rent: number; distance_km: number | null; property: { area: string; city: string; latitude?: number; longitude?: number } };
+type MapUnit = { id: number; slug: string; path?: string; title: string; monthly_rent: number; distance_km: number | null; property: { area: string; city: string; latitude?: number; longitude?: number } };
 
 // Minimal slice of the Leaflet API this component uses; Leaflet is loaded from a CDN with SRI.
 type LeafletLayer = { addTo(map: LeafletMap): LeafletLayer; bindPopup(html: string): LeafletLayer };
@@ -49,10 +49,8 @@ export default function NearbyMap({ units, center }: { units: MapUnit[]; center:
         const { latitude, longitude } = unit.property;
         if (latitude == null || longitude == null) return;
         const marker = L.circleMarker([latitude, longitude], { radius: 9, color: "#17242b", weight: 2, fillColor: "#f5bd68", fillOpacity: 1 }).addTo(current);
-        const city = encodeURIComponent(unit.property.city.toLowerCase());
-        const area = encodeURIComponent(unit.property.area.toLowerCase());
-        const slug = encodeURIComponent(unit.slug);
-        marker.bindPopup(`<strong>${escapeHTML(unit.title)}</strong><br>KSh ${unit.monthly_rent.toLocaleString()} / month<br>${escapeHTML(unit.property.area)}, ${escapeHTML(unit.property.city)}${unit.distance_km != null ? `<br>${unit.distance_km} km away` : ""}<br><a href="/listings/${city}/${area}/${slug}">See this home</a>`);
+        const href = unit.path ?? `/listings/${encodeURIComponent(unit.property.city.toLowerCase())}/${encodeURIComponent(unit.property.area.toLowerCase())}/${encodeURIComponent(unit.slug)}`;
+        marker.bindPopup(`<strong>${escapeHTML(unit.title)}</strong><br>KSh ${unit.monthly_rent.toLocaleString()} / month<br>${escapeHTML(unit.property.area)}, ${escapeHTML(unit.property.city)}${unit.distance_km != null ? `<br>${unit.distance_km} km away` : ""}<br><a href="${escapeHTML(href)}">See this home</a>`);
       });
       map.current = current;
     }).catch(() => { if (element.current) element.current.textContent = "The map could not load. Nearby homes are still listed below."; });

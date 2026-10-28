@@ -5,11 +5,11 @@ import { LEGAL_PAGES, LEGAL_STATUS, LEGAL_VERSION, legalValue } from "@/lib/lega
 import type { LegalDoc } from "@/lib/legal/types";
 
 /** One reusable renderer for every legal document, so wording lives in lib/legal/* and not in JSX. */
-export default function LegalPage({ doc, showDates = true }: { doc: LegalDoc; showDates?: boolean }) {
+export default function LegalPage({ doc, showDates = true, children }: { doc: LegalDoc; showDates?: boolean; children?: React.ReactNode }) {
   const updated = legalValue("lastUpdated");
   return (
     <main className="shell legal-shell">
-      <SiteHeader right={<Link className="navlink" href="/">Back to home</Link>} />
+      <SiteHeader />
       <article className="glass legal-doc">
         {LEGAL_STATUS === "draft" && (
           <div className="legal-draft" role="note">
@@ -24,6 +24,7 @@ export default function LegalPage({ doc, showDates = true }: { doc: LegalDoc; sh
           </p>
         )}
         {doc.intro && <p className="legal-intro">{doc.intro}</p>}
+        {children}
         {doc.sections.length > 4 && (
           <nav className="legal-toc" aria-label={`${doc.title} contents`}>
             <strong>Contents</strong>
