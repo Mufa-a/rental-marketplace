@@ -1,13 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Manrope } from "next/font/google";
+import localFont from "next/font/local";
 import SiteFooter from "@/components/SiteFooter";
 import ThemeToggle from "@/components/ThemeToggle";
 import "../styles/globals.css";
 import "../styles/app.css";
 
-// Self-hosted at build time: no request to Google from visitors' browsers.
-const display = Fraunces({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-display", display: "swap" });
-const body = Manrope({ subsets: ["latin"], weight: ["400", "500", "600", "700", "800"], variable: "--font-body", display: "swap" });
+// Variable fonts committed to the repo (SIL OFL 1.1, licences in app/fonts): builds never depend on
+// Google Fonts being reachable, and visitors' browsers never contact Google.
+const display = localFont({ src: "./fonts/fraunces-latin-variable.woff2", weight: "400 600", variable: "--font-display", display: "swap" });
+const body = localFont({ src: "./fonts/manrope-latin-variable.woff2", weight: "400 800", variable: "--font-body", display: "swap" });
 
 const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const description = "Search rentals in Kenya with clear monthly prices and confirmed availability, then arrange viewings with landlords.";
