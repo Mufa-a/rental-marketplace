@@ -316,3 +316,13 @@ class TestListingPerformance:
         other = landlord("+254700000098")
         client.force_authenticate(other)
         assert client.get("/api/v1/properties/mine/stats/").data["units"] == []
+
+
+@pytest.mark.django_db
+def test_ssr_server_with_the_internal_token_is_not_throttled(monkeypatch, settings):
+    from rest_framework.throttling import ScopedRateThrottle
+    monkeypatch.setitem(ScopedRateThrottle.THROTTLE_RATES, "public_search", "2/min")
+    settings.INTERNAL_API_TOKEN = "s" * 40
+    client = APIClient()
+    assert {client.get("/api/v1/properties/search/", HTTP_X_INTERNAL_TOKEN="s" * 40).status_code for _ in range(5)} == {200}
+    assert [client.get("/api/v1/properties/search/", HTTP_X_INTERNAL_TOKEN="wrong").status_code for _ in range(3)][-1] == 429

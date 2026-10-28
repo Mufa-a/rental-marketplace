@@ -23,6 +23,7 @@ from rest_framework.views import APIView
 from apps.accounts.models import LandlordProfile, TenantProfile, User
 from apps.core.models import AuditLog
 from apps.core.permissions import is_platform_admin
+from apps.core.throttles import PublicScopedRateThrottle
 
 from .models import Amenity, Property, PropertyMedia, SavedUnit, Unit, UnitDailyStat
 from .permissions import IsLandlordOrAdmin, can_manage
@@ -116,7 +117,7 @@ class LocationSuggestView(APIView):
     """GET /properties/locations/?q=kil — counties, towns and estates that currently have homes, with counts."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [PublicScopedRateThrottle]
     throttle_scope = "public_search"
 
     def get(self, request):
@@ -184,7 +185,7 @@ class PublicUnitSearchView(APIView):
     """Public listing search. Filters are documented in apps/properties/search.py."""
 
     permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [PublicScopedRateThrottle]
     throttle_scope = "public_search"
 
     def get(self, request):

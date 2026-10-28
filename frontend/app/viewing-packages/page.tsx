@@ -7,7 +7,9 @@ import type { Package } from "@/lib/types";
 
 const doc = LEGAL_DOCS["viewing-packages"];
 
-export const revalidate = 300;
+// Rendered per request (the price fetch itself is cached for 5 minutes) so a build without API access
+// never freezes an empty price table into the deployed page.
+export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: doc.title,
   description: doc.description,

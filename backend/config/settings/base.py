@@ -220,6 +220,10 @@ AVAILABILITY_CONFIRMATION_DAYS = env.int("AVAILABILITY_CONFIRMATION_DAYS", defau
 
 SENTRY_DSN = env("SENTRY_DSN", default="")
 
+# Shared secret sent by the Next.js server when rendering pages, so SSR traffic (one IP for all
+# visitors) is not throttled like a single client. Never exposed to browsers. Leave blank to disable.
+INTERNAL_API_TOKEN = env("INTERNAL_API_TOKEN", default="")
+
 # ---- Notifications ----
 # Public origin of the Next.js frontend; used to build links in emails.
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost:3000").rstrip("/")

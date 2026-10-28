@@ -1,9 +1,10 @@
 import type { MetadataRoute } from "next";
 import { slug } from "@/lib/search";
-import { SERVER_API } from "@/lib/server-api";
+import { SERVER_API, SERVER_HEADERS } from "@/lib/server-api";
 import type { SearchPage } from "@/lib/types";
 
-export const revalidate = 3600;
+// Generated per request from cached API data (1 h), never frozen at build time.
+export const dynamic = "force-dynamic";
 
 /** Public pages only. Dashboards, accounts and anything about tenants or bookings are never listed. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -17,7 +18,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   let cursor: string | null = "";
   for (let pages = 0; cursor !== null && pages < 50; pages += 1) {
     try {
-      const response = await fetch(`${SERVER_API}/properties/search/?ordering=-created_at${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { next: { revalidate: 3600 } });
+      const response = await fetch(`${SERVER_API}/properties/search/?ordering=-created_at${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { next: { revalidate: 3600 }, headers: SERVER_HEADERS });
       if (!response.ok) break;
       const body = (await response.json()) as SearchPage;
       for (const listing of body.results) {

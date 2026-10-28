@@ -33,3 +33,5 @@ pytest-cache-files-*/
 .vscode/
 *.tsbuildinfo
 dump.rdb
+infra/production.env
+backups/
