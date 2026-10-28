@@ -20,8 +20,8 @@ export default function LoginPage() {
   }
   async function verify(event: FormEvent) {
     event.preventDefault(); setMessage("Verifying…");
-    let body;
-    try { body = await apiFetch<any>("/auth/otp/verify/", { method: "POST", body: JSON.stringify({ phone_number: phone, code }) }); }
+    let body: { access: string; refresh: string; user: { id: number; phone_number: string; role: string } };
+    try { body = await apiFetch<typeof body>("/auth/otp/verify/", { method: "POST", body: JSON.stringify({ phone_number: phone, code }) }); }
     catch (error) { setMessage(error instanceof Error ? error.message : "We could not verify that code."); return; }
     localStorage.setItem("rental_access", body.access); localStorage.setItem("rental_refresh", body.refresh); localStorage.setItem("rental_user", JSON.stringify(body.user));
     router.push(body.user.role === "admin" ? "/admin" : body.user.role === "landlord" ? "/landlord" : "/tenant");

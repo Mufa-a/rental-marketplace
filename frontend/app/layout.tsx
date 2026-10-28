@@ -1,7 +1,12 @@
 import type { Metadata, Viewport } from "next";
+import { Fraunces, Manrope } from "next/font/google";
 import SiteFooter from "@/components/SiteFooter";
 import ThemeToggle from "@/components/ThemeToggle";
 import "../styles/globals.css";
+
+// Self-hosted at build time: no request to Google from visitors' browsers.
+const display = Fraunces({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-display", display: "swap" });
+const body = Manrope({ subsets: ["latin"], weight: ["400", "500", "600", "700", "800"], variable: "--font-body", display: "swap" });
 
 const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, "");
 const description = "Search rentals in Kenya with clear monthly prices and confirmed availability, then arrange viewings with landlords.";
@@ -21,15 +26,9 @@ const themeScript = `try{document.documentElement.dataset.theme=localStorage.get
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" data-theme="dark" suppressHydrationWarning>
+    <html lang="en-KE" data-theme="dark" className={`${display.variable} ${body.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
       </head>
       <body>
         <a className="skip-link" href="#main-content">Skip to content</a>

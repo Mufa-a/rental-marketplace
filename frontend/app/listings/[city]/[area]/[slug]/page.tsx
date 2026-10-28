@@ -17,18 +17,22 @@ async function getListing(slug: string): Promise<Listing | null> {
   return response.ok ? response.json() : null;
 }
 
-export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
-  const listing = await getListing(params.slug);
+type PageProps = { params: Promise<{ city: string; area: string; slug: string }> };
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { slug } = await params;
+  const listing = await getListing(slug);
   if (!listing) return {};
   const title = `${listing.title} in ${listing.property.area}, ${listing.property.city}`;
   const description = `${listing.bedrooms === 0 ? "Bedsitter or studio" : `${listing.bedrooms} bedroom home`} to rent in ${listing.property.area}, ${listing.property.city} for KSh ${listing.monthly_rent.toLocaleString()} per month.`;
-  const path = `/listings/${encodeURIComponent(listing.property.city.toLowerCase())}/${encodeURIComponent(listing.property.area.toLowerCase())}/${encodeURIComponent(params.slug)}`;
+  const path = `/listings/${encodeURIComponent(listing.property.city.toLowerCase())}/${encodeURIComponent(listing.property.area.toLowerCase())}/${encodeURIComponent(slug)}`;
   const image = listing.media[0]?.url;
   return { title, description, alternates: { canonical: path }, openGraph: { title, description, url: path, type: "website", ...(image ? { images: [{ url: image }] } : {}) }, twitter: { card: image ? "summary_large_image" : "summary", title, description } };
 }
 
-export default async function ListingPage({ params }: { params: { slug: string } }) {
-  const listing = await getListing(params.slug);
+export default async function ListingPage({ params }: PageProps) {
+  const { slug } = await params;
+  const listing = await getListing(slug);
   if (!listing) notFound();
   const schema = { "@context": "https://schema.org", "@type": "Apartment", name: `${listing.property.name} - ${listing.title}`, numberOfRooms: listing.bedrooms, address: { "@type": "PostalAddress", addressLocality: listing.property.area, addressRegion: listing.property.county, addressCountry: "KE" }, offers: { "@type": "Offer", price: String(listing.monthly_rent), priceCurrency: "KES", availability: "https://schema.org/InStock" } };
   const schemaJson = JSON.stringify(schema).replace(/</g, "\\u003c");

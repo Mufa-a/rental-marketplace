@@ -12,9 +12,10 @@ const nextConfig = {
   poweredByHeader: false,
   // Smaller production image: `next build` emits a self-contained server in .next/standalone.
   output: "standalone",
-  images: {
-    remotePatterns: [{ protocol: "https", hostname: "**.r2.dev" }],
-  },
+  // Listing photos are rendered with plain <img> tags straight from R2. Keeping the
+  // built-in optimizer off removes the /_next/image endpoint, which has had several
+  // unauthenticated DoS/RCE advisories, from the attack surface entirely.
+  images: { unoptimized: true },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

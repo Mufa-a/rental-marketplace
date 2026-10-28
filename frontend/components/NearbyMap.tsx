@@ -4,7 +4,15 @@ import { useEffect, useRef } from "react";
 
 type MapUnit = { id: number; slug: string; title: string; monthly_rent: number; distance_km: number | null; property: { area: string; city: string; latitude?: number; longitude?: number } };
 
-declare global { interface Window { L?: any } }
+// Minimal slice of the Leaflet API this component uses; Leaflet is loaded from a CDN with SRI.
+type LeafletLayer = { addTo(map: LeafletMap): LeafletLayer; bindPopup(html: string): LeafletLayer };
+type LeafletMap = { setView(center: [number, number], zoom: number): LeafletMap; remove(): void };
+type Leaflet = {
+  map(element: HTMLElement): LeafletMap;
+  tileLayer(url: string, options: Record<string, unknown>): LeafletLayer;
+  circleMarker(at: [number, number], options: Record<string, unknown>): LeafletLayer;
+};
+declare global { interface Window { L?: Leaflet } }
 
 let leafletLoader: Promise<void> | null = null;
 const escapeHTML = (value: string) => value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" } as Record<string, string>)[character]);
@@ -23,14 +31,14 @@ function loadLeaflet() {
 
 export default function NearbyMap({ units, center }: { units: MapUnit[]; center: { latitude: number; longitude: number } }) {
   const element = useRef<HTMLDivElement>(null);
-  const map = useRef<any>(null);
+  const map = useRef<LeafletMap | null>(null);
   useEffect(() => {
     let cancelled = false;
     void loadLeaflet().then(() => {
       if (cancelled || !element.current || !window.L) return;
       const L = window.L;
       if (map.current) { map.current.remove(); map.current = null; }
-      const current = L.map(element.current).setView([center.latitude, center.longitude], 13);
+      const current: LeafletMap = L.map(element.current).setView([center.latitude, center.longitude], 13);
       const key = process.env.NEXT_PUBLIC_MAPTILER_KEY;
       const tiles = key
         ? `https://api.maptiler.com/maps/streets-v4/{z}/{x}/{y}.png?key=${encodeURIComponent(key)}`
