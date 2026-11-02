@@ -87,6 +87,23 @@ contact release, verification and view counting.
 `verification/0001_initial` · `viewings/0004_marketplace_controls` (cancels pre-existing duplicate requests and
 returns their credits). All reversible.
 
+## Round 2 (November 2026)
+
+Closed four of the remaining risks from the first round:
+
+* **Sessions**: the refresh token moved from `localStorage` to an HttpOnly, Secure, SameSite=Strict cookie scoped to
+  the auth endpoints; the access token lives only in page memory; token refresh is serialised across tabs.
+* **Administrator second factor**: TOTP after the SMS code, enrolled only from the server
+  (`manage.py enroll_staff_totp`), secrets encrypted at rest, replay-proof.
+* **Privacy tools**: "Download my data" (JSON export of the user's own data) and switching between tenant and
+  landlord accounts.
+* **Hardening**: OTP request no longer reveals registered numbers; listing photos are verified by their bytes in
+  storage; optional Sentry with personal data stripped.
+
+Verified with 173 backend tests (SQLite and PostGIS) and browser runs of cookie sessions (reload, three concurrent
+tabs, sign-out), the admin TOTP step, the data download and the account switch. The earlier end-to-end flow
+(search → package purchase → viewing → approval → contact release → admin console) was re-run on the new session model.
+
 ## Not done / needs the owner
 
 * **Credentials and approvals**: Africa's Talking (production SMS), Safaricom Daraja go-live, R2 buckets (public +
@@ -94,8 +111,7 @@ returns their credits). All reversible.
   simulator.
 * **Legal**: legal entity details, DPO contact, retention periods and refund policy text placeholders; review by an
   advocate before publishing; Data Protection Act obligations listed in `docs/SECURITY.md`.
-* **Not implemented**: self-service data export; TOTP for staff; refresh token in an HttpOnly cookie and CSP nonces;
-  error monitoring (Sentry); WhatsApp notifications; credit expiry/per-region (sub-country) pricing (pricing is per
-  country); automated M-Pesa refunds (B2C) — refunds are recorded after being made in the M-Pesa portal; switching an
-  account between tenant and landlord roles.
+* **Not implemented**: CSP nonces; a second factor for Django's own admin login; frontend error monitoring;
+  WhatsApp notifications; credit expiry/per-region (sub-country) pricing (pricing is per country); automated M-Pesa
+  refunds (B2C) — refunds are recorded after being made in the M-Pesa portal.
 * **Not tested**: real Daraja sandbox/production calls, real SMS delivery, real R2 uploads, load testing.

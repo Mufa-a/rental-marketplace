@@ -49,7 +49,8 @@ npm run dev
 
 Open http://localhost:3000. Sign in with a phone number; with `DEBUG=True` and no SMS credentials the OTP prints in
 the Django window. `seed_demo` (development only) creates listings across Kenya, landlords `+254700000100…107` and
-tenants `+254700000200…202`. `createsuperuser` creates an admin who signs in the same way and uses `/admin`.
+tenants `+254700000200…202`. `createsuperuser` creates an admin who signs in the same way and uses `/admin`. Locally the admin authenticator
+step is off unless `STAFF_MFA_REQUIRED=True`; in production it is on — enrol with `python manage.py enroll_staff_totp <phone>`.
 
 Payments use the development simulator by default (`PAYMENT_PROVIDER=simulator` in `backend/.env.example`). Buy a
 package in the browser, then complete it with:
@@ -83,7 +84,8 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `pip-audit` and `npm 
 
 ## API overview (`/api/v1/`)
 
-* `auth/` — OTP request/verify, token refresh, logout, profile, consents, deletion requests.
+* `auth/` — OTP request/verify, admin `mfa/verify/`, cookie-based token refresh and logout, profile, `me/export/`
+  (download my data), `me/role/` (switch tenant/landlord), consents, deletion requests.
 * `properties/` — public `search/` (q, county, town, estate, rent, bedrooms, bathrooms, unit_type, amenities,
   furnishing, move_in_date, verified_only, latitude/longitude/radius_km, ordering), `locations/`, `listings/<slug>/`;
   landlord `mine/`, `mine/stats/`, units, availability, photos; tenant `saved/`.
