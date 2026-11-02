@@ -320,3 +320,69 @@ class DeletionRequestView(APIView):
         deletion.save(update_fields=["status", "resolved_at"])
         AuditLog.objects.create(actor=request.user, action="account.deletion_cancelled", object_type=deletion._meta.label, object_id=str(deletion.pk))
         return Response(status=204)
+
+
+class DataExportView(APIView):
+    """GET /auth/me/export/ — download a JSON copy of your own personal data."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "data_export"
+
+    def get_throttles(self):
+        from rest_framework.throttling import ScopedRateThrottle
+        return [ScopedRateThrottle()]
+
+    def get(self, request):
+        import json
+
+        from django.http import HttpResponse
+
+        from .export import build_export
+
+        AuditLog.objects.create(actor=request.user, action="account.data_exported", object_type="accounts.User", object_id=str(request.user.pk))
+        response = HttpResponse(json.dumps(build_export(request.user), indent=2, ensure_ascii=False), content_type="application/json; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="nyumbani-my-data-{timezone.localdate():%Y-%m-%d}.json"'
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class RoleSwitchView(APIView):
+    """POST /auth/me/role/ {"role": "landlord"|"tenant"} — switch between finding and listing homes.
+
+    Allowed only when nothing in progress would be stranded: no open viewing requests as a tenant;
+    no published listings, open requests or unpaid fees as a landlord.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.properties.models import Unit
+        from apps.referrals.models import ReferralFee
+        from apps.viewings.models import ViewingRequest
+
+        from .models import LandlordProfile, TenantProfile
+
+        user, target = request.user, request.data.get("role")
+        if user.role == User.Role.ADMIN or target not in (User.Role.TENANT, User.Role.LANDLORD):
+            return Response({"error": {"code": "invalid_role", "message": "Choose tenant or landlord."}}, status=400)
+        if target == user.role:
+            return Response({"role": user.role})
+        blockers = []
+        if user.role == User.Role.TENANT and ViewingRequest.objects.filter(tenant__user=user, status__in=ViewingRequest.ACTIVE_STATUSES).exists():
+            blockers.append("Cancel or finish your open viewing requests first.")
+        if user.role == User.Role.LANDLORD:
+            if Unit.objects.filter(property__landlord__user=user, is_published=True).exists():
+                blockers.append("Pause your published listings first.")
+            if ViewingRequest.objects.filter(unit__property__landlord__user=user, status__in=ViewingRequest.ACTIVE_STATUSES).exists():
+                blockers.append("Reply to or cancel open viewing requests first.")
+            if ReferralFee.objects.filter(attribution__landlord__user=user, status=ReferralFee.Status.PENDING).exists():
+                blockers.append("Settle outstanding success fees first.")
+        if blockers:
+            return Response({"error": {"code": "role_switch_blocked", "message": " ".join(blockers)}}, status=409)
+        previous = user.role
+        user.role = target
+        user.save(update_fields=["role"])
+        (LandlordProfile if target == User.Role.LANDLORD else TenantProfile).objects.get_or_create(user=user)
+        AuditLog.objects.create(actor=user, action="account.role_switched", object_type="accounts.User", object_id=str(user.pk),
+                                metadata={"from": previous, "to": target})
+        return Response({"role": user.role, "user": {"id": user.id, "phone_number": user.phone_number, "role": user.role}})

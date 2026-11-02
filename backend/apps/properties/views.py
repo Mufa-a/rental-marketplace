@@ -431,6 +431,25 @@ def _r2_configured():
                 settings.AWS_S3_ENDPOINT_URL, settings.R2_PUBLIC_BASE_URL))
 
 
+IMAGE_SIGNATURES = {
+    "image/jpeg": lambda head: head.startswith(b"\xff\xd8\xff"),
+    "image/png": lambda head: head.startswith(b"\x89PNG\r\n\x1a\n"),
+    "image/webp": lambda head: head[:4] == b"RIFF" and head[8:12] == b"WEBP",
+}
+
+
+def _content_matches(asset_key, content_type):
+    """Read the first bytes from storage: the declared type comes from the uploader and is not trusted."""
+    check = IMAGE_SIGNATURES.get(content_type)
+    if check is None:
+        return False
+    try:
+        head = _r2_client().get_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key, Range="bytes=0-15")["Body"].read()
+    except Exception:
+        return False
+    return check(head)
+
+
 class MediaListCreateView(APIView):
     permission_classes = [IsLandlordOrAdmin]
 
@@ -455,6 +474,12 @@ class MediaListCreateView(APIView):
             raise ValidationError({"asset_key": "The uploaded photo could not be verified. Upload it again."})
         if uploaded_object.get("ContentLength", 10 * 1024 * 1024 + 1) > 10 * 1024 * 1024 or uploaded_object.get("ContentType") not in ("image/jpeg", "image/png", "image/webp"):
             raise ValidationError({"asset_key": "The uploaded object is not an accepted image under 10 MB."})
+        if not _content_matches(asset_key, uploaded_object.get("ContentType")):
+            try:
+                _r2_client().delete_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=asset_key)
+            except Exception:
+                pass
+            raise ValidationError({"asset_key": "That file is not a real JPEG, PNG or WebP image."})
         content_hash = str(uploaded_object.get("ETag", "")).strip('"')[:64]
         media = serializer.save(unit=unit, content_hash=content_hash)
         reused = bool(content_hash) and PropertyMedia.objects.filter(content_hash=content_hash).exclude(unit__property__landlord=unit.property.landlord).exists()

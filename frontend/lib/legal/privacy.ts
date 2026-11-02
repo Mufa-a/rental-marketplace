@@ -173,6 +173,7 @@ export const privacy: LegalDoc = {
       heading: "11. Your rights",
       body: [
         "Depending on the law that applies to you, you may have the right to ask to access your information, correct it, delete it, object to certain uses, withdraw consent you gave, receive a copy of information you provided, and complain to your data protection authority. Which rights apply, and their limits, depend on applicable law; not every right applies in every place.",
+        "You can download a copy of the personal data we hold about you at any time from your Profile page (\u201cDownload my data\u201d), correct your name and email there, and request deletion of your account there.",
         "To make a request, use the Contact page or, for deletion, the option in your profile.",
       ],
     },

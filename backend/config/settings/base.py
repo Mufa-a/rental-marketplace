@@ -124,6 +124,7 @@ REST_FRAMEWORK = {
         "otp_request_ip": "60/1h",
         "payment_start": "20/hour",
         "verification_upload": "30/day",
+        "data_export": "10/day",
     },
     # Set to the number of reverse proxies in front of Django (e.g. 1 behind
     # Caddy/nginx) so throttling keys on the real client IP. 0 = trust only
@@ -237,6 +238,11 @@ LISTINGS_REQUIRE_APPROVAL = env.bool("LISTINGS_REQUIRE_APPROVAL", default=False)
 AVAILABILITY_CONFIRMATION_DAYS = env.int("AVAILABILITY_CONFIRMATION_DAYS", default=30)
 
 SENTRY_DSN = env("SENTRY_DSN", default="")
+if SENTRY_DSN:
+    from apps.core.monitoring import init_sentry  # error monitoring with personal data stripped
+
+    init_sentry(SENTRY_DSN, environment=env("SENTRY_ENVIRONMENT", default="production"),
+                traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.0))
 
 # Shared secret sent by the Next.js server when rendering pages, so SSR traffic (one IP for all
 # visitors) is not throttled like a single client. Never exposed to browsers. Leave blank to disable.

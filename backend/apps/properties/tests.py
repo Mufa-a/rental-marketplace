@@ -326,3 +326,41 @@ def test_ssr_server_with_the_internal_token_is_not_throttled(monkeypatch, settin
     client = APIClient()
     assert {client.get("/api/v1/properties/search/", HTTP_X_INTERNAL_TOKEN="s" * 40).status_code for _ in range(5)} == {200}
     assert [client.get("/api/v1/properties/search/", HTTP_X_INTERNAL_TOKEN="wrong").status_code for _ in range(3)][-1] == 429
+
+
+@pytest.mark.django_db
+class TestPhotoContentCheck:
+    def _client(self, monkeypatch, body, content_type="image/jpeg"):
+        import io
+        from apps.properties import views
+        deleted = []
+
+        class FakeR2:
+            def head_object(self, **kw):
+                return {"ContentLength": len(body), "ContentType": content_type, "ETag": '"abc123"'}
+
+            def get_object(self, **kw):
+                return {"Body": io.BytesIO(body[:16])}
+
+            def delete_object(self, **kw):
+                deleted.append(kw["Key"])
+
+        monkeypatch.setattr(views, "_r2_client", lambda **kw: FakeR2())
+        monkeypatch.setattr(views, "_r2_configured", lambda: True)
+        return deleted
+
+    def _post(self, owner, unit):
+        client = APIClient(); client.force_authenticate(owner)
+        return client.post(f"/api/v1/properties/units/{unit.id}/media/", {"asset_key": f"properties/{unit.id}/x.jpg", "media_type": "other"}, format="json")
+
+    def test_real_images_are_accepted(self, monkeypatch):
+        owner = landlord(); unit = make_home(owner)
+        self._client(monkeypatch, b"\xff\xd8\xff\xe0" + b"0" * 100)
+        assert self._post(owner, unit).status_code == 201
+
+    def test_a_disguised_file_is_rejected_and_deleted_from_storage(self, monkeypatch):
+        owner = landlord(); unit = make_home(owner)
+        deleted = self._client(monkeypatch, b"<html><script>alert(1)</script>")
+        response = self._post(owner, unit)
+        assert response.status_code == 400 and deleted == [f"properties/{unit.id}/x.jpg"]
+        assert unit.media.count() == 0

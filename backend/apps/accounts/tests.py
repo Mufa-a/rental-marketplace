@@ -319,3 +319,55 @@ class TestStaffMFA:
         settings.STAFF_MFA_REQUIRED = True
         response = _sign_in(APIClient(), monkeypatch, phone="0712345698", role="landlord")
         assert response.status_code == 200 and "access" in response.data
+
+
+@pytest.mark.django_db
+class TestPrivacySelfService:
+    def test_data_export_contains_my_data_but_not_other_peoples_identities(self):
+        import json
+        from apps.trust.models import Report
+        from apps.viewings.tests import marketplace
+        tenant_user, tenant, landlord_user, unit = marketplace("exp")
+        tenant_user.first_name = "Amina"; tenant_user.save()
+        client = APIClient(); client.force_authenticate(tenant_user)
+        client.post("/api/v1/viewings/requests/", {"unit": unit.id, "note": "Moving in May"}, format="json")
+        Report.objects.create(reporter=landlord_user, reported_user=tenant_user, reason="harassment", detail="secret reporter text")
+        response = client.get("/api/v1/auth/me/export/")
+        assert response.status_code == 200 and response["Content-Disposition"].startswith("attachment;")
+        body = response.content.decode()
+        data = json.loads(body)
+        assert data["account"]["first_name"] == "Amina" and data["viewing_requests_made"][0]["your_message"] == "Moving in May"
+        assert data["reports_about_you"] == [{"reason": "harassment", "at": data["reports_about_you"][0]["at"], "resolution": ""}]
+        assert landlord_user.phone_number not in body and "secret reporter text" not in body
+        from apps.core.models import AuditLog
+        assert AuditLog.objects.filter(action="account.data_exported", actor=tenant_user).exists()
+        assert APIClient().get("/api/v1/auth/me/export/").status_code == 401
+
+    def test_role_switch_is_blocked_while_something_is_in_progress(self):
+        from apps.viewings.tests import marketplace
+        tenant_user, tenant, landlord_user, unit = marketplace("rsw")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").data["id"]
+        assert client.post("/api/v1/auth/me/role/", {"role": "landlord"}, format="json").status_code == 409
+        client.post(f"/api/v1/viewings/requests/{request_id}/cancel/", {}, format="json")
+        switched = client.post("/api/v1/auth/me/role/", {"role": "landlord"}, format="json")
+        assert switched.status_code == 200 and switched.data["role"] == "landlord"
+        tenant_user.refresh_from_db()
+        assert tenant_user.role == "landlord" and hasattr(tenant_user, "landlord_profile")
+        # The landlord side still has a published listing, so it cannot switch away yet.
+        client.force_authenticate(landlord_user)
+        assert client.post("/api/v1/auth/me/role/", {"role": "tenant"}, format="json").status_code == 409
+        admin = User.objects.create_superuser(phone_number="+254712340001", password="x-secure-password-1")
+        client.force_authenticate(admin)
+        assert client.post("/api/v1/auth/me/role/", {"role": "tenant"}, format="json").status_code == 400
+
+
+def test_error_reports_are_stripped_of_personal_data():
+    from apps.core.monitoring import scrub_event
+    event = {"user": {"id": 5, "phone": "+254712345678"}, "request": {
+        "data": {"phone_number": "0712345678", "code": "123456"}, "cookies": {"nyumbani_refresh": "x"},
+        "query_string": "latitude=-1.2&longitude=36.8", "headers": {"Authorization": "Bearer abc", "X-Internal-Token": "t", "Accept": "json"}}}
+    cleaned = scrub_event(event)
+    assert "user" not in cleaned and "data" not in cleaned["request"] and "cookies" not in cleaned["request"]
+    assert cleaned["request"]["query_string"] == "[removed]"
+    assert cleaned["request"]["headers"] == {"Authorization": "[removed]", "X-Internal-Token": "[removed]", "Accept": "json"}
