@@ -2,45 +2,71 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 
 export type ApiError = Error & { status?: number; code?: string };
 
-function token(name: string) {
-  return typeof window === "undefined" ? null : window.localStorage.getItem(name);
+/*
+ * Session model: the refresh token is an HttpOnly cookie that JavaScript can never read. The short-lived
+ * access token is kept only in this module's memory, so a page reload simply refreshes it. The
+ * "rental_user" entry in localStorage holds non-secret details (id, role, phone) for routing only.
+ */
+let accessToken: string | null = null;
+let refreshing: Promise<string | null> | null = null;
+
+const USER_KEY = "rental_user";
+
+export function storeSession(access: string, user: object) {
+  accessToken = access;
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 function clearSession() {
-  localStorage.removeItem("rental_access");
-  localStorage.removeItem("rental_refresh");
-  localStorage.removeItem("rental_user");
+  accessToken = null;
+  try { localStorage.removeItem(USER_KEY); localStorage.removeItem("rental_access"); localStorage.removeItem("rental_refresh"); } catch { /* storage blocked */ }
 }
 
-async function refreshAccessToken(): Promise<string | null> {
-  const refresh = token("rental_refresh");
-  if (!refresh) return null;
-  const response = await fetch(`${API_BASE_URL}/auth/token/refresh/`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refresh }),
+async function requestNewAccessToken(): Promise<string | null> {
+  const response = await fetch(`${API_BASE_URL}/auth/token/refresh/`, { method: "POST", credentials: "include" });
+  if (response.status === 401) { clearSession(); return null; }
+  if (!response.ok) return null; // transient failure: keep the session, let the caller retry later
+  accessToken = (await response.json()).access;
+  return accessToken;
+}
+
+/** One refresh at a time, also across browser tabs, so rotated cookies never race each other. */
+function refreshAccessToken(): Promise<string | null> {
+  if (!refreshing) {
+    const locks = typeof navigator !== "undefined" ? (navigator as Navigator & { locks?: LockManager }).locks : undefined;
+    const run = () => requestNewAccessToken();
+    // `await` flattens the lock's promise-of-a-promise (the callback itself is async).
+    const pending: Promise<string | null> = locks ? (async () => await locks.request("nyumbani-token-refresh", run))() : run();
+    refreshing = pending.finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+
+async function currentAccess(): Promise<string | null> {
+  return accessToken ?? (await refreshAccessToken());
+}
+
+/** fetch() against the API with the user's access token, refreshing it once on 401. */
+export async function authorizedFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const send = (access: string | null) => fetch(`${API_BASE_URL}${path}`, {
+    ...options, credentials: "include",
+    headers: { ...(access ? { Authorization: `Bearer ${access}` } : {}), ...options.headers },
   });
-  if (!response.ok) { clearSession(); return null; }
-  const body = await response.json();
-  localStorage.setItem("rental_access", body.access);
-  if (body.refresh) localStorage.setItem("rental_refresh", body.refresh);
-  return body.access;
+  let response = await send(await currentAccess());
+  if (response.status === 401) {
+    accessToken = null;
+    const renewed = await refreshAccessToken();
+    if (renewed) response = await send(renewed);
+  }
+  return response;
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}, authenticated = false): Promise<T> {
-  const makeRequest = (access?: string | null) => fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body && !(typeof FormData !== "undefined" && options.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
-      ...(authenticated && access ? { Authorization: `Bearer ${access}` } : {}),
-      ...options.headers,
-    },
-  });
-
-  let access = authenticated ? token("rental_access") : null;
-  let response = await makeRequest(access);
-  if (authenticated && response.status === 401) {
-    access = await refreshAccessToken();
-    if (access) response = await makeRequest(access);
-  }
+  const jsonBody = options.body && !(typeof FormData !== "undefined" && options.body instanceof FormData);
+  const init: RequestInit = { ...options, headers: { ...(jsonBody ? { "Content-Type": "application/json" } : {}), ...options.headers } };
+  const response = authenticated
+    ? await authorizedFetch(path, init)
+    : await fetch(`${API_BASE_URL}${path}`, { ...init, credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const err = new Error(body?.error?.message ?? "We could not complete that request. Please try again.") as ApiError;
@@ -54,22 +80,15 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, authe
 
 export async function signOut() {
   if (typeof window === "undefined") return;
-  if (token("rental_refresh")) {
-    const access = await refreshAccessToken();
-    const refresh = token("rental_refresh");
-    if (access && refresh) {
-      await apiFetch("/auth/logout/", { method: "POST", body: JSON.stringify({ refresh }) }, true).catch(() => undefined);
-    }
-  }
+  // The server blacklists the refresh token from the cookie and clears it; works even if the access token expired.
+  await fetch(`${API_BASE_URL}/auth/logout/`, { method: "POST", credentials: "include" }).catch(() => undefined);
   clearSession();
   window.location.assign("/");
 }
 
 /** Download an authenticated file (e.g. an admin CSV export) without putting the token in a URL. */
 export async function downloadFile(path: string, filename: string) {
-  const send = (access: string | null) => fetch(`${API_BASE_URL}${path}`, { headers: access ? { Authorization: `Bearer ${access}` } : {} });
-  let response = await send(token("rental_access"));
-  if (response.status === 401) response = await send(await refreshAccessToken());
+  const response = await authorizedFetch(path);
   if (!response.ok) throw new Error("The export could not be downloaded.");
   const url = URL.createObjectURL(await response.blob());
   const link = Object.assign(document.createElement("a"), { href: url, download: filename });

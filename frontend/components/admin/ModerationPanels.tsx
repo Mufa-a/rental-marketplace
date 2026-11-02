@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, authorizedFetch } from "@/lib/api";
 import { date, dateTime, money, titleCase } from "@/lib/format";
 import { Pager, useAdminList } from "./useAdminList";
 
@@ -101,9 +101,7 @@ export function LandlordVerificationPanel({ notify }: { notify: Notify }) {
   }
   async function view(docId: number) {
     // Fetched with the admin's token and shown from memory; never a shareable link.
-    const access = localStorage.getItem("rental_access");
-    const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
-    const response = await fetch(`${base}/admin/verification-documents/${docId}/`, { headers: access ? { Authorization: `Bearer ${access}` } : {} });
+    const response = await authorizedFetch(`/admin/verification-documents/${docId}/`);
     if (!response.ok) { notify("The document could not be opened (it may have been deleted after the retention period).", true); return; }
     const blob = await response.blob();
     setPreview({ url: URL.createObjectURL(blob), type: blob.type });

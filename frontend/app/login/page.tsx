@@ -3,13 +3,13 @@
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, storeSession } from "@/lib/api";
 import SiteHeader from "@/components/SiteHeader";
 import { LEGAL_VERSION } from "@/lib/legal/config";
-import { dashboardFor } from "@/lib/session";
+import { currentUser, dashboardFor } from "@/lib/session";
 import type { SessionUser } from "@/lib/types";
 
-type VerifyResponse = { access: string; refresh: string; user: SessionUser };
+type VerifyResponse = { access?: string; user?: SessionUser; mfa_required?: boolean; mfa_ticket?: string };
 
 /** Only same-site paths are honoured as a post-login destination (no open redirects). */
 const safeNext = (value: string | null) => (value && value.startsWith("/") && !value.startsWith("//") ? value : null);
@@ -23,9 +23,11 @@ function LoginForm() {
   const [requested, setRequested] = useState(false);
   const [message, setMessage] = useState(""); const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mfaTicket, setMfaTicket] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const signup = params.get("mode") === "signup";
 
-  useEffect(() => { if (localStorage.getItem("rental_access")) router.replace(safeNext(params.get("next")) ?? "/"); }, [params, router]);
+  useEffect(() => { if (currentUser()) router.replace(safeNext(params.get("next")) ?? "/"); }, [params, router]);
 
   async function requestOtp(event?: FormEvent) {
     event?.preventDefault(); setBusy(true); setFailed(false); setMessage(requested ? "Sending a new code…" : "Sending code…");
@@ -41,9 +43,38 @@ function LoginForm() {
     event.preventDefault(); setBusy(true); setFailed(false); setMessage("Verifying…");
     try {
       const body = await apiFetch<VerifyResponse>("/auth/otp/verify/", { method: "POST", body: JSON.stringify({ phone_number: phone, code }) });
-      localStorage.setItem("rental_access", body.access); localStorage.setItem("rental_refresh", body.refresh); localStorage.setItem("rental_user", JSON.stringify(body.user));
-      router.push(safeNext(params.get("next")) ?? dashboardFor(body.user.role));
+      if (body.mfa_required && body.mfa_ticket) {
+        setMfaTicket(body.mfa_ticket); setMessage("Enter the 6-digit code from your authenticator app."); setBusy(false);
+        return;
+      }
+      finish(body);
     } catch (error) { setFailed(true); setMessage(error instanceof Error ? error.message : "We could not verify that code."); setBusy(false); }
+  }
+
+  function finish(body: VerifyResponse) {
+    if (!body.access || !body.user) throw new Error("Sign-in did not complete. Please try again.");
+    storeSession(body.access, body.user);
+    router.push(safeNext(params.get("next")) ?? dashboardFor(body.user.role));
+  }
+
+  async function verifyMfa(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setFailed(false); setMessage("Checking…");
+    try {
+      finish(await apiFetch<VerifyResponse>("/auth/mfa/verify/", { method: "POST", body: JSON.stringify({ mfa_ticket: mfaTicket, code: mfaCode }) }));
+    } catch (error) { setFailed(true); setMessage(error instanceof Error ? error.message : "That code did not work."); setBusy(false); }
+  }
+
+  if (mfaTicket) {
+    return <section className="glass auth-card">
+      <p className="eyebrow">Administrator sign-in</p>
+      <h1>Authenticator code</h1>
+      <p className="muted">Open your authenticator app and enter the current 6-digit code for Nyumbani admin.</p>
+      <form onSubmit={verifyMfa} className="field-stack">
+        <label>Authenticator code<input autoComplete="one-time-code" inputMode="numeric" required pattern="[0-9]{6}" maxLength={6} autoFocus value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></label>
+        <button type="submit" disabled={busy || mfaCode.length !== 6}>{busy ? "Checking…" : "Sign in"}</button>
+      </form>
+      {message && <p className={failed ? "notice notice-error" : "muted"} role="status" aria-live="polite">{message}</p>}
+    </section>;
   }
 
   return <section className="glass auth-card">

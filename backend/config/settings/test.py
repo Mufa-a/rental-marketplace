@@ -29,3 +29,6 @@ import tempfile  # noqa: E402
 
 PRIVATE_MEDIA_ROOT = tempfile.mkdtemp(prefix="nyumbani-private-")
 R2_PRIVATE_BUCKET_NAME = ""
+
+# Most tests exercise admin endpoints with force_authenticate; MFA has its own tests.
+STAFF_MFA_REQUIRED = False

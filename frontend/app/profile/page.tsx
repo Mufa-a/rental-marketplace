@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { apiFetch, signOut } from "@/lib/api";
+import { currentUser } from "@/lib/session";
 import SiteHeader from "@/components/SiteHeader";
 import AccountDeletionPanel from "@/components/AccountDeletionPanel";
 
@@ -13,7 +14,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
+    if (!currentUser()) { window.location.assign("/login?next=/profile"); return; }
     apiFetch<Profile>("/auth/me/", {}, true).then(setProfile)
       .catch(error => setMessage(error instanceof Error ? error.message : "We could not load your profile."))
       .finally(() => setLoading(false));

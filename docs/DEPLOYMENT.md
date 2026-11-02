@@ -28,8 +28,13 @@ docker compose -f docker-compose.prod.yml --env-file infra/production.env build
 docker compose -f docker-compose.prod.yml --env-file infra/production.env up -d db redis
 docker compose -f docker-compose.prod.yml --env-file infra/production.env run --rm backend python manage.py migrate
 docker compose -f docker-compose.prod.yml --env-file infra/production.env run --rm backend python manage.py createsuperuser
+docker compose -f docker-compose.prod.yml --env-file infra/production.env run --rm backend python manage.py enroll_staff_totp +2547XXXXXXXX
 docker compose -f docker-compose.prod.yml --env-file infra/production.env up -d
 ```
+
+`enroll_staff_totp` prints a secret/QR link for an authenticator app and asks for the first code. Administrators
+sign in with the SMS code **and** an authenticator code (`STAFF_MFA_REQUIRED=True`). Enrolment is only possible from
+the server, so a hijacked SIM cannot add a device. Re-run the command to replace a lost phone.
 
 `createsuperuser` asks for a phone number: that account signs in on the website with an SMS code and gets the
 admin console at `/admin`. Django's own admin is at `/<ADMIN_URL>` (a non-default path you choose).

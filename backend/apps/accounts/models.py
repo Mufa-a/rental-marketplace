@@ -145,3 +145,14 @@ class AccountDeletionRequest(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("user",), condition=models.Q(status="pending"), name="one_pending_deletion_request_per_user"),
         ]
+
+
+class StaffTOTPDevice(models.Model):
+    """Authenticator-app second factor for a platform administrator (see apps/accounts/mfa.py)."""
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="totp_device")
+    secret_encrypted = models.CharField(max_length=255)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    last_used_step = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

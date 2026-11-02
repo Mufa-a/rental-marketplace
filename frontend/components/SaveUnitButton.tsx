@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { currentUser } from "@/lib/session";
 
 type Saved = { unit: { id: number } };
 
@@ -10,14 +11,14 @@ export default function SaveUnitButton({ unitId }: { unitId: number }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (!localStorage.getItem("rental_access")) return;
+    if (currentUser()?.role !== "tenant") return;
     apiFetch<Saved[]>("/properties/saved/", {}, true)
       .then(items => setSaved(items.some(item => item.unit.id === unitId)))
       .catch(() => undefined);
   }, [unitId]);
 
   async function toggle() {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
+    if (!currentUser()) { window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); return; }
     setBusy(true); setMessage("");
     try {
       if (saved) await apiFetch(`/properties/saved/${unitId}/`, { method: "DELETE" }, true);

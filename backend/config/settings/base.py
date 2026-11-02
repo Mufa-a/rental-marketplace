@@ -145,6 +145,24 @@ SIMPLE_JWT = {
 
 # ---- CORS ----
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=["http://localhost:3000"])
+# The refresh-token cookie must be sent on cross-origin calls from the site in development
+# (localhost:3000 -> :8000). Only the explicit origins above are allowed.
+CORS_ALLOW_CREDENTIALS = True
+
+# ---- Session cookie for the refresh token (apps/accounts/auth_cookies.py) ----
+REFRESH_COOKIE = {
+    "name": "nyumbani_refresh",
+    "path": "/api/v1/auth/",
+    "samesite": "Strict",
+    "secure": env.bool("REFRESH_COOKIE_SECURE", default=not env.bool("DEBUG", default=False)),
+    "domain": env("REFRESH_COOKIE_DOMAIN", default=""),
+}
+
+# ---- Staff second factor (apps/accounts/mfa.py) ----
+STAFF_MFA_REQUIRED = env.bool("STAFF_MFA_REQUIRED", default=True)
+# Fernet key for TOTP secrets at rest. If unset it is derived from DJANGO_SECRET_KEY, so rotating
+# the secret key then requires re-enrolling staff authenticators.
+TOTP_ENCRYPTION_KEY = env("TOTP_ENCRYPTION_KEY", default="")
 
 # ---- Cache / Celery (Redis) ----
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")

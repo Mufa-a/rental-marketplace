@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { currentUser } from "@/lib/session";
 
 const REASONS: [string, string][] = [
   ["fraudulent_listing", "Fraudulent or fake listing"],
@@ -25,7 +26,7 @@ export default function ReportListingButton({ unitId }: { unitId: number }) {
   const [sent, setSent] = useState(false);
 
   function begin() {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
+    if (!currentUser()) { window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); return; }
     setOpen(true);
   }
   async function submit(event: FormEvent) {

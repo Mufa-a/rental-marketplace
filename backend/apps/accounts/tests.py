@@ -206,3 +206,116 @@ def test_otp_verification_is_throttled_per_phone_across_codes():
     payload = {"phone_number": "0712000999", "code": "000000"}
     codes = [client.post("/api/v1/auth/otp/verify/", payload, format="json").status_code for _ in range(12)]
     assert codes[:10] == [400] * 10 and codes[-1] == 429
+
+
+def _sign_in(client, monkeypatch, phone="0712345600", role="tenant"):
+    import apps.accounts.services as services
+    monkeypatch.setattr(services, "generate_otp_code", lambda: "111111")
+    client.post("/api/v1/auth/otp/request/", {"phone_number": phone, "role": role, "accept_terms": True})
+    return client.post("/api/v1/auth/otp/verify/", {"phone_number": phone, "code": "111111"})
+
+
+@pytest.mark.django_db
+class TestCookieSessions:
+    def test_refresh_token_is_only_in_an_httponly_strict_cookie(self, monkeypatch):
+        client = APIClient()
+        response = _sign_in(client, monkeypatch)
+        assert response.status_code == 200 and "access" in response.data and "refresh" not in response.data
+        cookie = response.cookies["nyumbani_refresh"]
+        assert cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/api/v1/auth/"
+
+    def test_refresh_rotates_the_cookie_and_the_old_token_stops_working(self, monkeypatch):
+        client = APIClient()
+        first = _sign_in(client, monkeypatch).cookies["nyumbani_refresh"].value
+        refreshed = client.post("/api/v1/auth/token/refresh/")
+        assert refreshed.status_code == 200 and "access" in refreshed.data
+        assert refreshed.cookies["nyumbani_refresh"].value != first
+        stale = APIClient()
+        stale.cookies["nyumbani_refresh"] = first
+        assert stale.post("/api/v1/auth/token/refresh/").status_code == 401
+
+    def test_suspended_users_cannot_refresh(self, monkeypatch):
+        client = APIClient()
+        _sign_in(client, monkeypatch)
+        User.objects.filter(phone_number="+254712345600").update(is_active=False)
+        response = client.post("/api/v1/auth/token/refresh/")
+        assert response.status_code == 401 and response.cookies["nyumbani_refresh"].value == ""
+
+    def test_logout_blacklists_and_clears_even_with_an_expired_access_token(self, monkeypatch):
+        client = APIClient()
+        token = _sign_in(client, monkeypatch).cookies["nyumbani_refresh"].value
+        response = client.post("/api/v1/auth/logout/")
+        assert response.status_code == 204 and response.cookies["nyumbani_refresh"].value == ""
+        replay = APIClient()
+        replay.cookies["nyumbani_refresh"] = token
+        assert replay.post("/api/v1/auth/token/refresh/").status_code == 401
+
+    def test_otp_request_does_not_reveal_whether_the_number_is_registered(self, monkeypatch):
+        client = APIClient()
+        new = client.post("/api/v1/auth/otp/request/", {"phone_number": "0712345601", "accept_terms": True}).data
+        _sign_in(client, monkeypatch, phone="0712345602")
+        existing = client.post("/api/v1/auth/otp/request/", {"phone_number": "0712345602"}).data
+        assert set(new) == set(existing) == {"phone_number", "expires_in_minutes"}
+
+    def test_credentialed_cors_is_limited_to_configured_origins(self):
+        ok = APIClient().options("/api/v1/auth/token/refresh/", HTTP_ORIGIN="http://localhost:3000", HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST")
+        assert ok["Access-Control-Allow-Credentials"] == "true" and ok["Access-Control-Allow-Origin"] == "http://localhost:3000"
+        evil = APIClient().options("/api/v1/auth/token/refresh/", HTTP_ORIGIN="https://evil.example", HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST")
+        assert "Access-Control-Allow-Origin" not in evil
+
+
+@pytest.mark.django_db
+class TestStaffMFA:
+    def _admin(self):
+        return User.objects.create_superuser(phone_number="+254712345699", password="x-secure-password-1")
+
+    SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
+    def _enrol(self, user):
+        """Run the operator command exactly as documented, typing the app's current code at the prompt."""
+        from io import StringIO
+        from unittest import mock
+
+        import pyotp
+        from django.core.management import call_command
+
+        from apps.accounts import mfa as mfa_module
+
+        out = StringIO()
+        with mock.patch("pyotp.random_base32", return_value=self.SECRET), \
+                mock.patch("builtins.input", side_effect=lambda prompt: pyotp.TOTP(self.SECRET).now()):
+            call_command("enroll_staff_totp", user.phone_number, stdout=out)
+        assert "confirmed" in out.getvalue()
+        device = user.__class__.objects.get(pk=user.pk).totp_device
+        assert self.SECRET not in device.secret_encrypted  # encrypted at rest
+        assert mfa_module.decrypt_secret(device.secret_encrypted) == self.SECRET
+        # The confirmation code used up the current 30-second step; reset so the sign-in below can use a fresh code.
+        type(device).objects.filter(pk=device.pk).update(last_used_step=0)
+        return self.SECRET
+
+    def test_admin_sign_in_requires_an_enrolled_authenticator(self, settings, monkeypatch):
+        settings.STAFF_MFA_REQUIRED = True
+        self._admin()
+        response = _sign_in(APIClient(), monkeypatch, phone="0712345699")
+        assert response.status_code == 403 and response.data["error"]["code"] == "mfa_enrolment_required"
+        assert "nyumbani_refresh" not in response.cookies
+
+    def test_admin_gets_a_session_only_after_a_valid_totp_and_codes_cannot_be_replayed(self, settings, monkeypatch):
+        import pyotp
+        settings.STAFF_MFA_REQUIRED = True
+        secret = self._enrol(self._admin())
+        client = APIClient()
+        first = _sign_in(client, monkeypatch, phone="0712345699")
+        assert first.data["mfa_required"] is True and "access" not in first.data and "nyumbani_refresh" not in first.cookies
+        ticket = first.data["mfa_ticket"]
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": "000000"}).status_code == 400
+        code = pyotp.TOTP(secret).now()
+        ok = client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": code})
+        assert ok.status_code == 200 and "access" in ok.data and ok.cookies["nyumbani_refresh"].value
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": code}).status_code == 400  # replay
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": "forged", "code": code}).status_code == 400
+
+    def test_tenants_and_landlords_are_never_asked_for_a_second_factor(self, settings, monkeypatch):
+        settings.STAFF_MFA_REQUIRED = True
+        response = _sign_in(APIClient(), monkeypatch, phone="0712345698", role="landlord")
+        assert response.status_code == 200 and "access" in response.data

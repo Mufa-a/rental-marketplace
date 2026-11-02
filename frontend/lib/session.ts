@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import type { SessionUser } from "./types";
 
+/** Non-secret profile of the signed-in user (the credentials themselves are an HttpOnly cookie). */
 export function currentUser(): SessionUser | null {
-  if (typeof window === "undefined" || !localStorage.getItem("rental_access")) return null;
+  if (typeof window === "undefined") return null;
   try { return JSON.parse(localStorage.getItem("rental_user") || "null"); } catch { return null; }
 }
 

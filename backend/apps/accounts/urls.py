@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import ConsentView, DeletionRequestView, LogoutView, MeView, OTPRequestView, OTPVerifyView, TokenRefreshView
+from .views import CookieTokenRefreshView, ConsentView, DeletionRequestView, LogoutView, MeView, MFAVerifyView, OTPRequestView, OTPVerifyView
 
 urlpatterns = [
     path("otp/request/", OTPRequestView.as_view(), name="otp-request"),
@@ -9,5 +9,6 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="me"),
     path("consents/", ConsentView.as_view(), name="consents"),
     path("deletion-request/", DeletionRequestView.as_view(), name="deletion-request"),
-    path("token/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
+    path("token/refresh/", CookieTokenRefreshView.as_view(), name="token-refresh"),
+    path("mfa/verify/", MFAVerifyView.as_view(), name="mfa-verify"),
 ]
