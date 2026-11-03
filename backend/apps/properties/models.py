@@ -30,6 +30,8 @@ class Property(models.Model):
         PENDING = "pending", "Verification pending"
         VERIFIED = "verified", "Verified"
         REJECTED = "rejected", "Rejected"
+        # Was verified, but its address or location changed (or a moderator asked for a recheck).
+        NEEDS_REVIEW = "needs_review", "Requires review"
 
     landlord = models.ForeignKey("accounts.LandlordProfile", on_delete=models.PROTECT, related_name="properties")
     name = models.CharField(max_length=180)
@@ -48,6 +50,7 @@ class Property(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["city", "area", "is_active"], name="properties__city_26452e_idx"),
+            models.Index(fields=["county", "city"], name="property_county_city_idx"),
             GistIndex(fields=["location"], name="properties_location_gist"),
         ]
         ordering = ("-created_at",)
@@ -64,6 +67,12 @@ class Unit(models.Model):
         HOUSE = "house", "House"
         MAISONETTE = "maisonette", "Maisonette"
         ROOM = "room", "Room"
+
+    class ModerationStatus(models.TextChoices):
+        APPROVED = "approved", "Approved"
+        PENDING_REVIEW = "pending_review", "Awaiting review"
+        CHANGES_REQUESTED = "changes_requested", "Changes requested"
+        REJECTED = "rejected", "Rejected"
 
     class Furnishing(models.TextChoices):
         UNFURNISHED = "unfurnished", "Unfurnished"
@@ -89,6 +98,12 @@ class Unit(models.Model):
     # Set by trust & safety (auto-hide on reports, landlord suspension). While set, the
     # landlord cannot re-publish the unit; only an administrator can clear it.
     moderation_hold = models.BooleanField(default=False)
+    # Content moderation, separate from the trust & safety hold above. Only APPROVED listings
+    # appear in search. New listings start PENDING_REVIEW when LISTINGS_REQUIRE_APPROVAL is on
+    # or when they look like a duplicate of another landlord's listing.
+    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.APPROVED)
+    moderation_note = models.CharField(max_length=500, blank=True)
+    possible_duplicate_of = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     amenities = models.ManyToManyField(Amenity, blank=True, related_name="units")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -98,6 +113,8 @@ class Unit(models.Model):
         indexes = [
             models.Index(fields=["available", "is_published"], name="properties__availab_9610c6_idx"),
             models.Index(fields=["monthly_rent", "bedrooms"], name="properties__monthly_66e9ee_idx"),
+            models.Index(fields=["is_published", "available", "moderation_status", "availability_confirmed_at"], name="unit_public_search_idx"),
+            models.Index(fields=["moderation_status", "created_at"], name="unit_moderation_queue_idx"),
         ]
         ordering = ("-created_at",)
 
@@ -139,6 +156,8 @@ class PropertyMedia(models.Model):
     asset_key = models.CharField(max_length=500, unique=True)
     media_type = models.CharField(max_length=20, choices=MediaType.choices, default=MediaType.OTHER)
     alt_text = models.CharField(max_length=180, blank=True)
+    # Storage checksum (ETag) of the uploaded file; the same photo on another landlord's listing is a fraud signal.
+    content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     sort_order = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -157,3 +176,14 @@ class SavedUnit(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=("tenant", "unit"), name="unique_saved_unit_per_tenant")]
         ordering = ("-created_at",)
+
+
+class UnitDailyStat(models.Model):
+    """Aggregate public detail-page views per listing per day. No visitor identifiers are stored."""
+
+    unit = models.ForeignKey(Unit, on_delete=models.CASCADE, related_name="daily_stats")
+    date = models.DateField()
+    views = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("unit", "date"), name="one_stat_row_per_unit_day")]

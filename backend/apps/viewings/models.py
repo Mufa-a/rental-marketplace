@@ -10,6 +10,14 @@ class ViewingRequest(models.Model):
         CANCELLED = "cancelled", "Cancelled"
         EXPIRED = "expired", "Expired"
 
+    ACTIVE_STATUSES = ("pending_landlord", "approved")
+
+    class Party(models.TextChoices):
+        TENANT = "tenant", "Tenant"
+        LANDLORD = "landlord", "Landlord"
+        ADMIN = "admin", "Administrator"
+        SYSTEM = "system", "System"
+
     tenant = models.ForeignKey("accounts.TenantProfile", on_delete=models.CASCADE, related_name="viewing_requests")
     unit = models.ForeignKey("properties.Unit", on_delete=models.PROTECT, related_name="viewing_requests")
     preferred_times = models.JSONField(default=list, blank=True)
@@ -17,10 +25,17 @@ class ViewingRequest(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     landlord_note = models.CharField(max_length=500, blank=True)
     responded_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.CharField(max_length=10, choices=Party.choices, blank=True)
+    cancel_reason = models.CharField(max_length=300, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        constraints = [
+            # A tenant has at most one open request per home, so a credit is never spent twice on it.
+            models.UniqueConstraint(fields=("tenant", "unit"), condition=models.Q(status__in=("pending_landlord", "approved")),
+                                    name="one_active_request_per_tenant_unit"),
+        ]
         indexes = [
             models.Index(fields=["tenant", "status"], name="viewings_vi_tenant__d5ce61_idx"),
             models.Index(fields=["unit", "status"], name="viewings_vi_unit_id_08380c_idx"),
@@ -45,9 +60,13 @@ class Viewing(models.Model):
     scheduled_at = models.DateTimeField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
     meeting_note = models.CharField(max_length=500, blank=True)
+    reschedule_count = models.PositiveSmallIntegerField(default=0)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("status", "scheduled_at"), name="viewing_status_time_idx")]
 
 
 class Outcome(models.Model):

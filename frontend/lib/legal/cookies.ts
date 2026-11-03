@@ -18,7 +18,7 @@ export const cookies: LegalDoc = {
       id: "essential",
       heading: "2. Essential: authentication and session",
       body: [
-        "After you verify your phone number, the website stores three items in your browser’s local storage so you stay signed in: a short-lived access token (rental_access), a refresh token (rental_refresh) and a small record of your role and phone number (rental_user). They are removed when you sign out. Local storage is a browser storage technology similar to a cookie; we describe it here for transparency.",
+        "After you verify your phone number, we set one strictly necessary cookie, nyumbani_refresh, so you stay signed in for up to 30 days. It is HttpOnly (page scripts cannot read it), sent only to our sign-in endpoints, never to other sites, and deleted when you sign out. The website also keeps a small record of your role and phone number (rental_user) in your browser’s local storage so it can show the right pages; it contains no password or token and is removed when you sign out.",
         "Staff-only administration pages (the Django admin on the API server) use a session cookie and a CSRF cookie. Ordinary users never receive these.",
       ],
     },

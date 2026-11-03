@@ -7,15 +7,17 @@ from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenRefreshView
 
-from . import services
 from apps.core.models import AuditLog
-from .models import AccountDeletionRequest, ConsentRecord, User
+
+from . import mfa, services
+from .auth_cookies import clear_refresh_cookie, issue_session, read_refresh, set_refresh_cookie
+from .models import AccountDeletionRequest, ConsentRecord, StaffTOTPDevice, User
 from .serializers import ConsentSerializer, DeletionRequestSerializer, OTPRequestSerializer, OTPVerifySerializer, ProfileSerializer
-from .throttles import PhoneOTPThrottle
+from .throttles import IPOTPThrottle, PhoneOTPThrottle, PhoneOTPVerifyThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ class OTPRequestView(APIView):
     """
 
     permission_classes = [AllowAny]
-    throttle_classes = [PhoneOTPThrottle]
+    throttle_classes = [PhoneOTPThrottle, IPOTPThrottle]
 
     def post(self, request):
         serializer = OTPRequestSerializer(data=request.data)
@@ -81,13 +83,8 @@ class OTPRequestView(APIView):
                 status=503,
             )
 
-        return Response(
-            {
-                "phone_number": phone_number,
-                "new_account": created,
-                "expires_in_minutes": services.OTP_TTL_MINUTES,
-            }
-        )
+        # Deliberately the same response for new and existing numbers (no account enumeration).
+        return Response({"phone_number": phone_number, "expires_in_minutes": services.OTP_TTL_MINUTES})
 
 
 class OTPVerifyView(APIView):
@@ -101,6 +98,7 @@ class OTPVerifyView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [PhoneOTPVerifyThrottle]
 
     def post(self, request):
         serializer = OTPVerifySerializer(data=request.data)
@@ -123,36 +121,80 @@ class OTPVerifyView(APIView):
         except services.OTPInvalid as exc:
             return Response({"error": {"code": "otp_invalid", "message": str(exc)}}, status=400)
 
-        refresh = RefreshToken.for_user(user)
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": {"id": user.id, "phone_number": user.phone_number, "role": user.role},
-            }
-        )
+        if mfa.mfa_required_for(user):
+            device = StaffTOTPDevice.objects.filter(user=user, confirmed_at__isnull=False).first()
+            if device is None:
+                return Response({"error": {"code": "mfa_enrolment_required",
+                                           "message": "Administrator accounts need an authenticator app. Ask an operator to run "
+                                                      "`python manage.py enroll_staff_totp` for your number."}}, status=403)
+            return Response({"mfa_required": True, "mfa_ticket": mfa.issue_ticket(user)})
+        return issue_session(Response({}), user)
+
+
+class MFAVerifyView(APIView):
+    """POST /api/v1/auth/mfa/verify/ {"mfa_ticket": "...", "code": "123456"} — second step for administrators."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        ticket, code = request.data.get("mfa_ticket", ""), str(request.data.get("code", ""))
+        try:
+            user = User.objects.filter(pk=mfa.user_id_from_ticket(ticket), is_active=True).first()
+            device = StaffTOTPDevice.objects.filter(user=user, confirmed_at__isnull=False).first() if user else None
+            if device is None:
+                raise mfa.MFAError("Your sign-in step expired. Start again with a new SMS code.")
+            mfa.verify(device, code)
+        except mfa.MFAError as exc:
+            return Response({"error": {"code": "mfa_invalid", "message": str(exc)}}, status=400)
+        AuditLog.objects.create(actor=user, action="auth.mfa_verified", object_type="accounts.User", object_id=str(user.pk))
+        return issue_session(Response({}), user)
+
+
+class CookieTokenRefreshView(APIView):
+    """POST /api/v1/auth/token/refresh/ — new access token from the HttpOnly refresh cookie (rotated)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        unauthorized = Response({"error": {"code": "session_expired", "message": "Please sign in again."}}, status=401)
+        raw = read_refresh(request)
+        if not raw:
+            return clear_refresh_cookie(unauthorized)
+        try:
+            user_id = RefreshToken(raw).get("user_id")
+        except TokenError:
+            return clear_refresh_cookie(unauthorized)
+        if not User.objects.filter(pk=user_id, is_active=True).exists():
+            return clear_refresh_cookie(unauthorized)  # suspended or deleted since the token was issued
+        serializer = TokenRefreshSerializer(data={"refresh": raw})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except (InvalidToken, TokenError):
+            return clear_refresh_cookie(unauthorized)
+        response = Response({"access": serializer.validated_data["access"]})
+        rotated = serializer.validated_data.get("refresh")
+        return set_refresh_cookie(response, rotated) if rotated else response
 
 
 class LogoutView(APIView):
-    """POST /api/v1/auth/logout/ {"refresh": "..."} — blacklists the refresh token."""
+    """POST /api/v1/auth/logout/ — blacklists the refresh token from the cookie (or body) and clears the cookie.
 
-    permission_classes = [IsAuthenticated]
+    Works even when the access token has already expired; it only ever acts on the token presented.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
-        try:
-            refresh = RefreshToken(request.data.get("refresh", ""))
-            if str(refresh.get("user_id")) != str(request.user.pk):
-                return Response(
-                    {"error": {"code": "invalid_token", "message": "This refresh token does not belong to your account."}},
-                    status=400,
-                )
-            refresh.blacklist()
-        except (TokenError, KeyError, TypeError):
-            return Response(
-                {"error": {"code": "invalid_token", "message": "Invalid or already blacklisted."}},
-                status=400,
-            )
-        return Response(status=204)
+        raw = read_refresh(request)
+        if raw:
+            try:
+                RefreshToken(raw).blacklist()
+            except TokenError:
+                pass  # already expired or blacklisted: the outcome is the same
+        return clear_refresh_cookie(Response(status=204))
 
 
 class MeView(APIView):
@@ -278,3 +320,69 @@ class DeletionRequestView(APIView):
         deletion.save(update_fields=["status", "resolved_at"])
         AuditLog.objects.create(actor=request.user, action="account.deletion_cancelled", object_type=deletion._meta.label, object_id=str(deletion.pk))
         return Response(status=204)
+
+
+class DataExportView(APIView):
+    """GET /auth/me/export/ — download a JSON copy of your own personal data."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "data_export"
+
+    def get_throttles(self):
+        from rest_framework.throttling import ScopedRateThrottle
+        return [ScopedRateThrottle()]
+
+    def get(self, request):
+        import json
+
+        from django.http import HttpResponse
+
+        from .export import build_export
+
+        AuditLog.objects.create(actor=request.user, action="account.data_exported", object_type="accounts.User", object_id=str(request.user.pk))
+        response = HttpResponse(json.dumps(build_export(request.user), indent=2, ensure_ascii=False), content_type="application/json; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="nyumbani-my-data-{timezone.localdate():%Y-%m-%d}.json"'
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class RoleSwitchView(APIView):
+    """POST /auth/me/role/ {"role": "landlord"|"tenant"} — switch between finding and listing homes.
+
+    Allowed only when nothing in progress would be stranded: no open viewing requests as a tenant;
+    no published listings, open requests or unpaid fees as a landlord.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.properties.models import Unit
+        from apps.referrals.models import ReferralFee
+        from apps.viewings.models import ViewingRequest
+
+        from .models import LandlordProfile, TenantProfile
+
+        user, target = request.user, request.data.get("role")
+        if user.role == User.Role.ADMIN or target not in (User.Role.TENANT, User.Role.LANDLORD):
+            return Response({"error": {"code": "invalid_role", "message": "Choose tenant or landlord."}}, status=400)
+        if target == user.role:
+            return Response({"role": user.role})
+        blockers = []
+        if user.role == User.Role.TENANT and ViewingRequest.objects.filter(tenant__user=user, status__in=ViewingRequest.ACTIVE_STATUSES).exists():
+            blockers.append("Cancel or finish your open viewing requests first.")
+        if user.role == User.Role.LANDLORD:
+            if Unit.objects.filter(property__landlord__user=user, is_published=True).exists():
+                blockers.append("Pause your published listings first.")
+            if ViewingRequest.objects.filter(unit__property__landlord__user=user, status__in=ViewingRequest.ACTIVE_STATUSES).exists():
+                blockers.append("Reply to or cancel open viewing requests first.")
+            if ReferralFee.objects.filter(attribution__landlord__user=user, status=ReferralFee.Status.PENDING).exists():
+                blockers.append("Settle outstanding success fees first.")
+        if blockers:
+            return Response({"error": {"code": "role_switch_blocked", "message": " ".join(blockers)}}, status=409)
+        previous = user.role
+        user.role = target
+        user.save(update_fields=["role"])
+        (LandlordProfile if target == User.Role.LANDLORD else TenantProfile).objects.get_or_create(user=user)
+        AuditLog.objects.create(actor=user, action="account.role_switched", object_type="accounts.User", object_id=str(user.pk),
+                                metadata={"from": previous, "to": target})
+        return Response({"role": user.role, "user": {"id": user.id, "phone_number": user.phone_number, "role": user.role}})

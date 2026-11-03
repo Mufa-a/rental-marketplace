@@ -7,6 +7,17 @@ if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS or ALLOWED_HOSTS == ["localhost", "
 if not AFRICASTALKING_API_KEY or not AFRICASTALKING_USERNAME:
     raise RuntimeError("Africa's Talking credentials must be set in production to deliver OTPs.")
 
+if PAYMENT_PROVIDER != "mpesa":
+    raise RuntimeError("PAYMENT_PROVIDER must be 'mpesa' in production; the simulator never moves real money.")
+if MPESA_ENV not in ("sandbox", "production"):
+    raise RuntimeError("MPESA_ENV must be 'sandbox' or 'production'.")
+if MPESA_CALLBACK_TOKEN and len(MPESA_CALLBACK_TOKEN) < 32:
+    raise RuntimeError("MPESA_CALLBACK_TOKEN must be a long random secret (at least 32 characters).")
+
+if not R2_PRIVATE_BUCKET_NAME and not env.bool("ALLOW_LOCAL_PRIVATE_MEDIA", default=False):
+    raise RuntimeError("Set R2_PRIVATE_BUCKET_NAME (a private bucket) for verification documents, "
+                       "or ALLOW_LOCAL_PRIVATE_MEDIA=True with an encrypted, backed-up PRIVATE_MEDIA_ROOT volume.")
+
 DEBUG = False
 
 # ---- HTTPS / cookies / headers ----

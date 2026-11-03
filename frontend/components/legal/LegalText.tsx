@@ -12,6 +12,8 @@ export default function LegalText({ text }: { text: string }) {
         const key = match[1];
         if (key === "brand") return <Fragment key={index}>{BRAND_NAME}</Fragment>;
         if (key === "operator") return <Fragment key={index}>{OPERATOR_NAME}</Fragment>;
+        // Must match REFERRAL_ATTRIBUTION_DAYS on the backend.
+        if (key === "referralWindow") return <Fragment key={index}>{process.env.NEXT_PUBLIC_REFERRAL_WINDOW_DAYS ?? "60"}</Fragment>;
         if (key === "year") return <Fragment key={index}>{new Date().getFullYear()}</Fragment>;
         const value = legalValue(key);
         return value ? (

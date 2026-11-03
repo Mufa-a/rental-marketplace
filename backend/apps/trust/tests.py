@@ -108,7 +108,10 @@ class TestReportAbuseControls:
         unit.refresh_from_db()
         assert unit.moderation_hold
         admin = APIClient()
-        admin.force_authenticate(User.objects.create_user(username="ad", phone_number="+254700000199", role="admin"))
+        # role=admin alone is not enough; platform admins are active staff accounts.
+        admin.force_authenticate(User.objects.create_user(username="ad-no-staff", phone_number="+254700000198", role="admin"))
+        assert admin.patch(f"/api/v1/properties/units/{unit.id}/", {"is_published": True}, format="json").status_code == 403
+        admin.force_authenticate(User.objects.create_user(username="ad", phone_number="+254700000199", role="admin", is_staff=True))
         assert admin.patch(f"/api/v1/properties/units/{unit.id}/", {"is_published": True}, format="json").status_code == 200
 
 

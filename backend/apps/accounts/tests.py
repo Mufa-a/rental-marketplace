@@ -197,3 +197,177 @@ class TestConsentAndAccountSafety:
         client.force_authenticate(second)
         assert client.get("/api/v1/auth/deletion-request/").data["request"] is None
         assert client.delete("/api/v1/auth/deletion-request/").status_code == 404
+
+
+@pytest.mark.django_db
+def test_otp_verification_is_throttled_per_phone_across_codes():
+    from rest_framework.test import APIClient as Client
+    client = Client()
+    payload = {"phone_number": "0712000999", "code": "000000"}
+    codes = [client.post("/api/v1/auth/otp/verify/", payload, format="json").status_code for _ in range(12)]
+    assert codes[:10] == [400] * 10 and codes[-1] == 429
+
+
+def _sign_in(client, monkeypatch, phone="0712345600", role="tenant"):
+    import apps.accounts.services as services
+    monkeypatch.setattr(services, "generate_otp_code", lambda: "111111")
+    client.post("/api/v1/auth/otp/request/", {"phone_number": phone, "role": role, "accept_terms": True})
+    return client.post("/api/v1/auth/otp/verify/", {"phone_number": phone, "code": "111111"})
+
+
+@pytest.mark.django_db
+class TestCookieSessions:
+    def test_refresh_token_is_only_in_an_httponly_strict_cookie(self, monkeypatch):
+        client = APIClient()
+        response = _sign_in(client, monkeypatch)
+        assert response.status_code == 200 and "access" in response.data and "refresh" not in response.data
+        cookie = response.cookies["nyumbani_refresh"]
+        assert cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/api/v1/auth/"
+
+    def test_refresh_rotates_the_cookie_and_the_old_token_stops_working(self, monkeypatch):
+        client = APIClient()
+        first = _sign_in(client, monkeypatch).cookies["nyumbani_refresh"].value
+        refreshed = client.post("/api/v1/auth/token/refresh/")
+        assert refreshed.status_code == 200 and "access" in refreshed.data
+        assert refreshed.cookies["nyumbani_refresh"].value != first
+        stale = APIClient()
+        stale.cookies["nyumbani_refresh"] = first
+        assert stale.post("/api/v1/auth/token/refresh/").status_code == 401
+
+    def test_suspended_users_cannot_refresh(self, monkeypatch):
+        client = APIClient()
+        _sign_in(client, monkeypatch)
+        User.objects.filter(phone_number="+254712345600").update(is_active=False)
+        response = client.post("/api/v1/auth/token/refresh/")
+        assert response.status_code == 401 and response.cookies["nyumbani_refresh"].value == ""
+
+    def test_logout_blacklists_and_clears_even_with_an_expired_access_token(self, monkeypatch):
+        client = APIClient()
+        token = _sign_in(client, monkeypatch).cookies["nyumbani_refresh"].value
+        response = client.post("/api/v1/auth/logout/")
+        assert response.status_code == 204 and response.cookies["nyumbani_refresh"].value == ""
+        replay = APIClient()
+        replay.cookies["nyumbani_refresh"] = token
+        assert replay.post("/api/v1/auth/token/refresh/").status_code == 401
+
+    def test_otp_request_does_not_reveal_whether_the_number_is_registered(self, monkeypatch):
+        client = APIClient()
+        new = client.post("/api/v1/auth/otp/request/", {"phone_number": "0712345601", "accept_terms": True}).data
+        _sign_in(client, monkeypatch, phone="0712345602")
+        existing = client.post("/api/v1/auth/otp/request/", {"phone_number": "0712345602"}).data
+        assert set(new) == set(existing) == {"phone_number", "expires_in_minutes"}
+
+    def test_credentialed_cors_is_limited_to_configured_origins(self):
+        ok = APIClient().options("/api/v1/auth/token/refresh/", HTTP_ORIGIN="http://localhost:3000", HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST")
+        assert ok["Access-Control-Allow-Credentials"] == "true" and ok["Access-Control-Allow-Origin"] == "http://localhost:3000"
+        evil = APIClient().options("/api/v1/auth/token/refresh/", HTTP_ORIGIN="https://evil.example", HTTP_ACCESS_CONTROL_REQUEST_METHOD="POST")
+        assert "Access-Control-Allow-Origin" not in evil
+
+
+@pytest.mark.django_db
+class TestStaffMFA:
+    def _admin(self):
+        return User.objects.create_superuser(phone_number="+254712345699", password="x-secure-password-1")
+
+    SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
+    def _enrol(self, user):
+        """Run the operator command exactly as documented, typing the app's current code at the prompt."""
+        from io import StringIO
+        from unittest import mock
+
+        import pyotp
+        from django.core.management import call_command
+
+        from apps.accounts import mfa as mfa_module
+
+        out = StringIO()
+        with mock.patch("pyotp.random_base32", return_value=self.SECRET), \
+                mock.patch("builtins.input", side_effect=lambda prompt: pyotp.TOTP(self.SECRET).now()):
+            call_command("enroll_staff_totp", user.phone_number, stdout=out)
+        assert "confirmed" in out.getvalue()
+        device = user.__class__.objects.get(pk=user.pk).totp_device
+        assert self.SECRET not in device.secret_encrypted  # encrypted at rest
+        assert mfa_module.decrypt_secret(device.secret_encrypted) == self.SECRET
+        # The confirmation code used up the current 30-second step; reset so the sign-in below can use a fresh code.
+        type(device).objects.filter(pk=device.pk).update(last_used_step=0)
+        return self.SECRET
+
+    def test_admin_sign_in_requires_an_enrolled_authenticator(self, settings, monkeypatch):
+        settings.STAFF_MFA_REQUIRED = True
+        self._admin()
+        response = _sign_in(APIClient(), monkeypatch, phone="0712345699")
+        assert response.status_code == 403 and response.data["error"]["code"] == "mfa_enrolment_required"
+        assert "nyumbani_refresh" not in response.cookies
+
+    def test_admin_gets_a_session_only_after_a_valid_totp_and_codes_cannot_be_replayed(self, settings, monkeypatch):
+        import pyotp
+        settings.STAFF_MFA_REQUIRED = True
+        secret = self._enrol(self._admin())
+        client = APIClient()
+        first = _sign_in(client, monkeypatch, phone="0712345699")
+        assert first.data["mfa_required"] is True and "access" not in first.data and "nyumbani_refresh" not in first.cookies
+        ticket = first.data["mfa_ticket"]
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": "000000"}).status_code == 400
+        code = pyotp.TOTP(secret).now()
+        ok = client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": code})
+        assert ok.status_code == 200 and "access" in ok.data and ok.cookies["nyumbani_refresh"].value
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": ticket, "code": code}).status_code == 400  # replay
+        assert client.post("/api/v1/auth/mfa/verify/", {"mfa_ticket": "forged", "code": code}).status_code == 400
+
+    def test_tenants_and_landlords_are_never_asked_for_a_second_factor(self, settings, monkeypatch):
+        settings.STAFF_MFA_REQUIRED = True
+        response = _sign_in(APIClient(), monkeypatch, phone="0712345698", role="landlord")
+        assert response.status_code == 200 and "access" in response.data
+
+
+@pytest.mark.django_db
+class TestPrivacySelfService:
+    def test_data_export_contains_my_data_but_not_other_peoples_identities(self):
+        import json
+        from apps.trust.models import Report
+        from apps.viewings.tests import marketplace
+        tenant_user, tenant, landlord_user, unit = marketplace("exp")
+        tenant_user.first_name = "Amina"; tenant_user.save()
+        client = APIClient(); client.force_authenticate(tenant_user)
+        client.post("/api/v1/viewings/requests/", {"unit": unit.id, "note": "Moving in May"}, format="json")
+        Report.objects.create(reporter=landlord_user, reported_user=tenant_user, reason="harassment", detail="secret reporter text")
+        response = client.get("/api/v1/auth/me/export/")
+        assert response.status_code == 200 and response["Content-Disposition"].startswith("attachment;")
+        body = response.content.decode()
+        data = json.loads(body)
+        assert data["account"]["first_name"] == "Amina" and data["viewing_requests_made"][0]["your_message"] == "Moving in May"
+        assert data["reports_about_you"] == [{"reason": "harassment", "at": data["reports_about_you"][0]["at"], "resolution": ""}]
+        assert landlord_user.phone_number not in body and "secret reporter text" not in body
+        from apps.core.models import AuditLog
+        assert AuditLog.objects.filter(action="account.data_exported", actor=tenant_user).exists()
+        assert APIClient().get("/api/v1/auth/me/export/").status_code == 401
+
+    def test_role_switch_is_blocked_while_something_is_in_progress(self):
+        from apps.viewings.tests import marketplace
+        tenant_user, tenant, landlord_user, unit = marketplace("rsw")
+        client = APIClient(); client.force_authenticate(tenant_user)
+        request_id = client.post("/api/v1/viewings/requests/", {"unit": unit.id}, format="json").data["id"]
+        assert client.post("/api/v1/auth/me/role/", {"role": "landlord"}, format="json").status_code == 409
+        client.post(f"/api/v1/viewings/requests/{request_id}/cancel/", {}, format="json")
+        switched = client.post("/api/v1/auth/me/role/", {"role": "landlord"}, format="json")
+        assert switched.status_code == 200 and switched.data["role"] == "landlord"
+        tenant_user.refresh_from_db()
+        assert tenant_user.role == "landlord" and hasattr(tenant_user, "landlord_profile")
+        # The landlord side still has a published listing, so it cannot switch away yet.
+        client.force_authenticate(landlord_user)
+        assert client.post("/api/v1/auth/me/role/", {"role": "tenant"}, format="json").status_code == 409
+        admin = User.objects.create_superuser(phone_number="+254712340001", password="x-secure-password-1")
+        client.force_authenticate(admin)
+        assert client.post("/api/v1/auth/me/role/", {"role": "tenant"}, format="json").status_code == 400
+
+
+def test_error_reports_are_stripped_of_personal_data():
+    from apps.core.monitoring import scrub_event
+    event = {"user": {"id": 5, "phone": "+254712345678"}, "request": {
+        "data": {"phone_number": "0712345678", "code": "123456"}, "cookies": {"nyumbani_refresh": "x"},
+        "query_string": "latitude=-1.2&longitude=36.8", "headers": {"Authorization": "Bearer abc", "X-Internal-Token": "t", "Accept": "json"}}}
+    cleaned = scrub_event(event)
+    assert "user" not in cleaned and "data" not in cleaned["request"] and "cookies" not in cleaned["request"]
+    assert cleaned["request"]["query_string"] == "[removed]"
+    assert cleaned["request"]["headers"] == {"Authorization": "[removed]", "X-Internal-Token": "[removed]", "Accept": "json"}

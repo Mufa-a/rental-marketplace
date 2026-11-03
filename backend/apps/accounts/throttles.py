@@ -44,3 +44,21 @@ class PhoneOTPThrottle(SimpleRateThrottle):
         except (AttributeError, TypeError):
             return None
         return self.cache_format % {"scope": self.scope, "ident": phone}
+
+
+class PhoneOTPVerifyThrottle(PhoneOTPThrottle):
+    """Caps code-guessing per phone across codes (each code also locks after 5 wrong tries)."""
+
+    scope = "otp_verify"
+
+
+class IPOTPThrottle(PhoneOTPThrottle):
+    """Per-network cap on OTP sends, so one client cannot spray SMS to many numbers.
+
+    Generous on purpose: Kenyan mobile carriers put many users behind one public IP.
+    """
+
+    scope = "otp_request_ip"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {"scope": self.scope, "ident": self.get_ident(request)}

@@ -25,5 +25,8 @@ def test_viewing_reminder_command_deduplicates_for_both_parties(settings):
     call_command("run_notifications", verbosity=0)
     call_command("run_notifications", verbosity=0)
 
-    assert Notification.objects.count() == 2
-    assert Notification.objects.filter(status=Notification.Status.PENDING).count() == 2
+    sms = Notification.objects.filter(channel=Notification.Channel.SMS)
+    assert sms.count() == 2
+    assert sms.filter(status=Notification.Status.PENDING).count() == 2
+    # Each party also gets exactly one in-app reminder.
+    assert Notification.objects.filter(channel=Notification.Channel.IN_APP).count() == 2

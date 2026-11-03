@@ -2,10 +2,14 @@
 
 import { FormEvent, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { currentUser } from "@/lib/session";
 
 const REASONS: [string, string][] = [
   ["fraudulent_listing", "Fraudulent or fake listing"],
-  ["misleading_information", "Misleading price, photos or details"],
+  ["fake_photos", "Photos are fake or of a different home"],
+  ["property_unavailable", "Home is not actually available"],
+  ["misleading_price", "Price differs from what was advertised"],
+  ["misleading_information", "Other misleading details"],
   ["suspicious_payment_request", "Asked to pay outside the platform or in advance"],
   ["inappropriate_content", "Inappropriate content"],
   ["harassment", "Harassment or abuse"],
@@ -22,7 +26,7 @@ export default function ReportListingButton({ unitId }: { unitId: number }) {
   const [sent, setSent] = useState(false);
 
   function begin() {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
+    if (!currentUser()) { window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); return; }
     setOpen(true);
   }
   async function submit(event: FormEvent) {
@@ -37,7 +41,7 @@ export default function ReportListingButton({ unitId }: { unitId: number }) {
 
   return (
     <div className="report-listing">
-      {!open && !sent && <button type="button" className="button-secondary button-small" onClick={begin}>Report this listing</button>}
+      {!open && !sent && <button type="button" className="button-secondary button-small" onClick={begin}>Report this listing or landlord</button>}
       {open && (
         <form className="field-stack glass report-form" onSubmit={submit}>
           <label>What is wrong?<select value={reason} onChange={(e) => setReason(e.target.value)}>{REASONS.map(([value, text]) => <option value={value} key={value}>{text}</option>)}</select></label>

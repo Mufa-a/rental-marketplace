@@ -20,7 +20,7 @@ from .models import AccountRestriction, Report
 
 # Reasons that count toward auto-hide. Harassment / "other" still reach the admin queue
 # but should not, on their own, take a listing offline.
-SERIOUS_REASONS = ("fraudulent_listing", "suspicious_payment_request", "misleading_information")
+SERIOUS_REASONS = ("fraudulent_listing", "suspicious_payment_request", "misleading_information", "fake_photos", "property_unavailable", "misleading_price")
 
 
 def auto_hide_threshold() -> int:

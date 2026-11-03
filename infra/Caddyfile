@@ -1,0 +1,25 @@
+# One public origin: the API, Django admin and admin static files go to Django; everything else to Next.js.
+# SITE_ADDRESS is your domain (e.g. nyumbani.co.ke) for automatic HTTPS, or ":80" for a local trial.
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@django path /api/* /healthz/ /static/* /{$DJANGO_ADMIN_PATH:admin}/*
+	handle @django {
+		reverse_proxy backend:8000
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	# Verification documents are uploaded through the API; allow a little over 4 x 5 MB.
+	request_body {
+		max_size 25MB
+	}
+	header {
+		-Server
+	}
+	log {
+		output stdout
+		format json
+	}
+}

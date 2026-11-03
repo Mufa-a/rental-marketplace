@@ -3,25 +3,40 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { useRequireRole } from "@/lib/session";
+import type { PublicListing } from "@/lib/types";
+import ListingCard from "@/components/ListingCard";
 import SiteHeader from "@/components/SiteHeader";
 
-type SavedItem = { id: number; unit_id: number; created_at: string; unit: { id: number; slug: string; title: string; monthly_rent: number; bedrooms: number; bathrooms: string; media: { url: string; alt_text: string }[]; property: { area: string; city: string } } };
+type SavedItem = { id: number; unit: PublicListing; still_available: boolean; created_at: string };
 
 export default function SavedHomesPage() {
-  const [items, setItems] = useState<SavedItem[]>([]);
+  const user = useRequireRole("tenant");
+  const [items, setItems] = useState<SavedItem[] | null>(null);
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    if (!localStorage.getItem("rental_access")) { window.location.assign("/login"); return; }
+    if (!user) return;
     apiFetch<SavedItem[]>("/properties/saved/", {}, true).then(setItems)
-      .catch(error => setMessage(error instanceof Error ? error.message : "We could not load your saved homes."))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((error) => { setItems([]); setMessage(error instanceof Error ? error.message : "We could not load your saved homes."); });
+  }, [user]);
 
   async function remove(unitId: number) {
-    try { await apiFetch(`/properties/saved/${unitId}/`, { method: "DELETE" }, true); setItems(current => current.filter(item => item.unit.id !== unitId)); }
+    try { await apiFetch(`/properties/saved/${unitId}/`, { method: "DELETE" }, true); setItems((current) => (current ?? []).filter((item) => item.unit.id !== unitId)); }
     catch (error) { setMessage(error instanceof Error ? error.message : "We could not remove that home."); }
   }
 
-  return <main className="shell"><SiteHeader right={<><Link className="navlink" href="/tenant">Dashboard</Link><Link className="navlink" href="/profile">Profile</Link></>} /><section className="dashboard-intro"><p className="eyebrow">Your shortlist</p><h1>Saved homes</h1><p className="muted">Keep the rentals you like together while you decide where to view.</p></section>{message && <p className="notice" role="alert">{message}</p>}{loading && <div className="glass empty">Loading your saved homes…</div>}{!loading && items.length === 0 && !message && <div className="glass empty"><h2>No saved homes yet</h2><p>Save a rental from its details page to keep it here.</p><Link className="button" href="/">Browse rentals</Link></div>}<div className="listing-grid">{items.map(({ unit }) => <article key={unit.id} className="glass saved-card"><Link className="saved-card-link" href={`/listings/${encodeURIComponent(unit.property.city.toLowerCase())}/${encodeURIComponent(unit.property.area.toLowerCase())}/${unit.slug}`}>{unit.media[0]?.url ? <img className="listing-image" src={unit.media[0].url} alt={unit.media[0].alt_text || unit.title} /> : <div className="listing-image image-placeholder"><span>Nyumbani</span></div>}<div className="listing-card-content"><p className="muted location">{unit.property.area}, {unit.property.city}</p><h3>{unit.title}</h3><strong className="price">KSh {unit.monthly_rent.toLocaleString()} <span>/ month</span></strong></div></Link><button className="button-secondary saved-remove" onClick={() => void remove(unit.id)}>Remove saved home</button></article>)}</div></main>;
+  const available = (items ?? []).filter((i) => i.still_available);
+  const gone = (items ?? []).filter((i) => !i.still_available);
+  return <main className="shell">
+    <SiteHeader />
+    <section className="dashboard-intro"><div><p className="eyebrow">Your shortlist</p><h1>Saved homes</h1><p className="muted">Keep the rentals you like together while you decide where to view.</p></div></section>
+    {message && <p className="notice notice-error" role="alert">{message}</p>}
+    {items === null && <div className="listing-grid">{[1, 2, 3].map((i) => <div className="glass skeleton-card" key={i} aria-hidden="true" />)}</div>}
+    {items?.length === 0 && !message && <div className="glass empty"><h2>No saved homes yet</h2><p>Tap &ldquo;Save this home&rdquo; on any listing to keep it here.</p><Link className="button" href="/">Browse rentals</Link></div>}
+    {available.length > 0 && <div className="listing-grid">{available.map(({ unit }) => <div key={unit.id} className="saved-item"><ListingCard listing={unit} /><button className="button-secondary button-small" onClick={() => void remove(unit.id)}>Remove</button></div>)}</div>}
+    {gone.length > 0 && <section className="results-section"><h2 className="group-title">No longer available</h2>
+      <ul className="plain-list">{gone.map(({ unit }) => <li key={unit.id} className="glass gone-row"><span><strong>{unit.title}</strong> <span className="muted">· {unit.property.area}</span></span><button className="button-secondary button-small" onClick={() => void remove(unit.id)}>Remove</button></li>)}</ul>
+    </section>}
+  </main>;
 }
